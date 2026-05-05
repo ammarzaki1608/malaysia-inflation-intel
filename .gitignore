@@ -1,0 +1,30 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+
+# Terraform — NEVER commit these
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+.terraform.lock.hcl
+
+# GCP credentials — NEVER commit these
+*.json
+service-account-key*.json
+application_default_credentials.json
+
+# Jupyter
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# Data files
+data/
+*.parquet
+*.csv
+
+# VS Code
+.vscode/
