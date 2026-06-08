@@ -1,0 +1,31 @@
+version: 2
+
+models:
+  - name: mart_cpi_features
+    description: "Main ML feature table — CPI with lag features, rolling stats, PPI leads and OPR"
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: state
+        tests:
+          - not_null
+      - name: division
+        tests:
+          - not_null
+      - name: cpi_index
+        tests:
+          - not_null
+
+  - name: mart_income_bands
+    description: "CPI state data enriched with HIES income band per state"
+    columns:
+      - name: date
+        tests:
+          - not_null
+      - name: state
+        tests:
+          - not_null
+      - name: division
+        tests:
+          - not_null

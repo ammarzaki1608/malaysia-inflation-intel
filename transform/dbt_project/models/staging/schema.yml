@@ -1,0 +1,78 @@
+version: 2
+
+sources:
+  - name: raw
+    database: modular-rush-495414-i2
+    schema: raw
+    tables:
+      - name: cpi_state
+        description: "Monthly CPI by state and division from DOSM"
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: state
+            tests:
+              - not_null
+          - name: division
+            tests:
+              - not_null
+          - name: index
+            tests:
+              - not_null
+
+      - name: cpi_national
+        description: "Monthly CPI at national level from DOSM"
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: division
+            tests:
+              - not_null
+
+      - name: ppi_headline
+        description: "Monthly headline PPI from DOSM"
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: series
+            tests:
+              - not_null
+              - accepted_values:
+                  arguments:
+                    values: ['abs', 'growth_mom', 'growth_yoy']
+
+      - name: ppi_sitc
+        description: "Monthly PPI by SITC section from DOSM"
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: series
+            tests:
+              - not_null
+          - name: section
+            tests:
+              - not_null
+
+      - name: hies_state
+        description: "Household income and expenditure by state HIES 2022"
+        columns:
+          - name: state
+            tests:
+              - not_null
+          - name: income_median
+            tests:
+              - not_null
+
+      - name: interest_rates
+        description: "Monthly interest rates including OPR from BNM"
+        columns:
+          - name: date
+            tests:
+              - not_null
+          - name: value
+            tests:
+              - not_null

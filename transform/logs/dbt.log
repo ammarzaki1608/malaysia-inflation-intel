@@ -1,0 +1,118 @@
+[0m00:39:01.012084 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185B1166510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185ADE3F390>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185B252BED0>]}
+
+
+============================== 00:39:01.015478 | 67150697-1a13-454a-853f-a3993f1cbe22 ==============================
+[0m00:39:01.015478 [info ] [MainThread]: Running with dbt=1.11.11
+[0m00:39:01.015969 [debug] [MainThread]: running dbt with arguments {'static_parser': 'True', 'no_print': 'None', 'version_check': 'True', 'target_path': 'None', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'printer_width': '80', 'write_json': 'True', 'empty': 'None', 'log_cache_events': 'False', 'introspect': 'True', 'cache_selected_only': 'False', 'fail_fast': 'False', 'debug': 'False', 'log_format': 'default', 'partial_parse': 'True', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'profiles_dir': 'C:\\Users\\ammar\\.dbt', 'indirect_selection': 'eager', 'use_colors': 'True', 'invocation_command': 'dbt init dbt_project', 'use_experimental_parser': 'False', 'log_path': 'logs'}
+[0m00:39:01.029721 [info ] [MainThread]: Creating dbt configuration folder at C:\Users\ammar\.dbt
+[0m00:39:01.030971 [info ] [MainThread]: A project called dbt_project already exists here.
+[0m00:39:01.031581 [debug] [MainThread]: Command `dbt init` succeeded at 00:39:01.031482 after 0.17 seconds
+[0m00:39:01.031818 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185B25328B0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185B35B3530>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x00000185B35409E0>]}
+[0m00:39:01.032065 [debug] [MainThread]: Flushing usage events
+[0m00:39:02.532404 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m00:43:47.540546 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A661E46510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A65EB1F390>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A663203ED0>]}
+
+
+============================== 00:43:47.543926 | de7879fb-fe29-4b76-b0d9-099fc93cba5b ==============================
+[0m00:43:47.543926 [info ] [MainThread]: Running with dbt=1.11.11
+[0m00:43:47.544399 [debug] [MainThread]: running dbt with arguments {'static_parser': 'True', 'no_print': 'None', 'version_check': 'True', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'target_path': 'None', 'printer_width': '80', 'write_json': 'True', 'introspect': 'True', 'log_cache_events': 'False', 'empty': 'None', 'cache_selected_only': 'False', 'log_format': 'default', 'debug': 'False', 'fail_fast': 'False', 'profiles_dir': 'C:\\Users\\ammar\\.dbt', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'partial_parse': 'True', 'use_colors': 'True', 'indirect_selection': 'eager', 'invocation_command': 'dbt init dbt_project', 'use_experimental_parser': 'False', 'log_path': 'logs'}
+[0m00:43:47.557537 [debug] [MainThread]: Starter project path: C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\include\starter_project
+[0m00:43:47.574399 [info ] [MainThread]: 
+Your new dbt project "dbt_project" was created!
+
+For more information on how to configure the profiles.yml file,
+please consult the dbt documentation here:
+
+  https://docs.getdbt.com/docs/configure-your-profile
+
+One more thing:
+
+Need help? Don't hesitate to reach out to us via GitHub issues or on Slack:
+
+  https://community.getdbt.com/
+
+Happy modeling!
+
+[0m00:43:47.574894 [info ] [MainThread]: Setting up your profile.
+[0m00:45:01.324292 [error] [MainThread]: Encountered an error:
+
+[0m00:45:01.326483 [error] [MainThread]: Traceback (most recent call last):
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\cli\requires.py", line 182, in wrapper
+    result, success = func(*args, **kwargs)
+                      ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\cli\requires.py", line 128, in wrapper
+    return func(*args, **kwargs)
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\cli\main.py", line 488, in init
+    results = task.run()
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 346, in run
+    self.setup_profile(profile_name)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 262, in setup_profile
+    self.create_profile_from_target(adapter, profile_name=profile_name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 179, in create_profile_from_target
+    self.create_profile_from_profile_template(profile_template, profile_name)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 163, in create_profile_from_profile_template
+    target = self.generate_target_from_input(prompts, initial_target)
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 116, in generate_target_from_input
+    target = self.generate_target_from_input(
+        profile_template_local[key][choice], target
+    )
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\task\init.py", line 129, in generate_target_from_input
+    target[key] = click.prompt(
+                  ~~~~~~~~~~~~^
+        text, default=default, hide_input=hide_input, type=type
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\click\termui.py", line 218, in prompt
+    value = prompt_func(prompt)
+  File "C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\click\termui.py", line 201, in prompt_func
+    raise Abort() from None
+click.exceptions.Abort
+
+[0m00:45:01.327395 [debug] [MainThread]: Command `dbt init` failed at 00:45:01.327198 after 73.94 seconds
+[0m00:45:01.327662 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A60FAA0050>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A60F9E3890>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001A60F9BDBF0>]}
+[0m00:45:01.327904 [debug] [MainThread]: Flushing usage events
+[0m00:45:02.502028 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m00:45:07.960104 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F759996510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F75667F390>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F75AD63ED0>]}
+
+
+============================== 00:45:07.963449 | a283fadd-c048-451d-a144-22a66e23ae25 ==============================
+[0m00:45:07.963449 [info ] [MainThread]: Running with dbt=1.11.11
+[0m00:45:07.963910 [debug] [MainThread]: running dbt with arguments {'static_parser': 'True', 'no_print': 'None', 'version_check': 'True', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'target_path': 'None', 'printer_width': '80', 'write_json': 'True', 'introspect': 'True', 'log_cache_events': 'False', 'empty': 'None', 'cache_selected_only': 'False', 'log_format': 'default', 'debug': 'False', 'fail_fast': 'False', 'profiles_dir': 'C:\\Users\\ammar\\.dbt', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'partial_parse': 'True', 'invocation_command': 'dbt init dbt_project', 'use_colors': 'True', 'indirect_selection': 'eager', 'use_experimental_parser': 'False', 'log_path': 'logs'}
+[0m00:45:07.976218 [info ] [MainThread]: A project called dbt_project already exists here.
+[0m00:45:07.976850 [debug] [MainThread]: Command `dbt init` succeeded at 00:45:07.976749 after 0.12 seconds
+[0m00:45:07.977092 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F75AD728B0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F75BDF3530>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001F75BD809E0>]}
+[0m00:45:07.977340 [debug] [MainThread]: Flushing usage events
+[0m00:45:09.100960 [debug] [MainThread]: An error was encountered while trying to flush usage events
+[0m00:45:39.613334 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'start', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF498D2510>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF4660F390>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF4AC9BED0>]}
+
+
+============================== 00:45:39.616701 | 337c6091-5a68-4a60-8c32-ac1cfc983763 ==============================
+[0m00:45:39.616701 [info ] [MainThread]: Running with dbt=1.11.11
+[0m00:45:39.617168 [debug] [MainThread]: running dbt with arguments {'version_check': 'True', 'no_print': 'None', 'static_parser': 'True', 'target_path': 'None', 'warn_error_options': 'WarnErrorOptionsV2(error=[], warn=[], silence=[])', 'printer_width': '80', 'write_json': 'True', 'empty': 'None', 'log_cache_events': 'False', 'introspect': 'True', 'cache_selected_only': 'False', 'log_format': 'default', 'debug': 'False', 'fail_fast': 'False', 'partial_parse': 'True', 'send_anonymous_usage_stats': 'True', 'quiet': 'False', 'warn_error': 'None', 'profiles_dir': 'C:\\Users\\ammar\\.dbt', 'invocation_command': 'dbt init dbt_project', 'use_colors': 'True', 'indirect_selection': 'eager', 'use_experimental_parser': 'False', 'log_path': 'logs'}
+[0m00:45:39.629303 [debug] [MainThread]: Starter project path: C:\Users\ammar\Documents\malaysia-inflation-intel\venv\Lib\site-packages\dbt\include\starter_project
+[0m00:45:39.638584 [info ] [MainThread]: 
+Your new dbt project "dbt_project" was created!
+
+For more information on how to configure the profiles.yml file,
+please consult the dbt documentation here:
+
+  https://docs.getdbt.com/docs/configure-your-profile
+
+One more thing:
+
+Need help? Don't hesitate to reach out to us via GitHub issues or on Slack:
+
+  https://community.getdbt.com/
+
+Happy modeling!
+
+[0m00:45:39.639004 [info ] [MainThread]: Setting up your profile.
+[0m00:48:29.469740 [info ] [MainThread]: Profile dbt_project written to C:\Users\ammar\.dbt\profiles.yml using target's profile_template.yml and your supplied values. Run 'dbt debug' to validate the connection.
+[0m00:48:29.470870 [debug] [MainThread]: Command `dbt init` succeeded at 00:48:29.470757 after 169.95 seconds
+[0m00:48:29.471210 [debug] [MainThread]: Sending event: {'category': 'dbt', 'action': 'invocation', 'label': 'end', 'context': [<snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF773589D0>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF4BD23890>, <snowplow_tracker.self_describing_json.SelfDescribingJson object at 0x000001AF7736DAE0>]}
+[0m00:48:29.471487 [debug] [MainThread]: Flushing usage events
+[0m00:48:30.647427 [debug] [MainThread]: An error was encountered while trying to flush usage events
