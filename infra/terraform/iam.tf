@@ -54,3 +54,15 @@ resource "google_project_iam_member" "vertex_gcs" {
   role    = "roles/storage.objectViewer"
   member  = "serviceAccount:${google_service_account.vertex.email}"
 }
+
+resource "google_project_iam_member" "vertex_bq_job" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.vertex.email}"
+}
+
+resource "google_project_iam_member" "vertex_bq_read" {
+  project = var.project_id
+  role    = "roles/bigquery.dataViewer"
+  member  = "serviceAccount:${google_service_account.vertex.email}"
+}

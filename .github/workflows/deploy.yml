@@ -1,0 +1,75 @@
+name: Build and Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ml/serving/**'
+      - 'app/streamlit/**'
+
+env:
+  PROJECT_ID: modular-rush-495414-i2
+  REGION: asia-southeast1
+  REGISTRY: asia-southeast1-docker.pkg.dev
+
+jobs:
+  deploy-api:
+    name: Deploy FastAPI service
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push API image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-api:latest \
+            ml/serving/
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-api:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy inflation-api \
+            --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-api:latest \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --quiet
+
+  deploy-streamlit:
+    name: Deploy Streamlit app
+    runs-on: ubuntu-latest
+    needs: deploy-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push Streamlit image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-app:latest \
+            app/streamlit/
+          docker push ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-app:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy inflation-app \
+            --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-app:latest \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --set-env-vars API_URL=https://inflation-api-${{ env.PROJECT_ID }}.${{ env.REGION }}.run.app \
+            --quiet

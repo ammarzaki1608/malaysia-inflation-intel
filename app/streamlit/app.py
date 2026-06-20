@@ -11,6 +11,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+import os
 
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
@@ -21,7 +22,7 @@ st.set_page_config(
 )
 
 # ── constants ─────────────────────────────────────────────────────────────────
-API_URL = "http://localhost:8080"
+API_URL = os.getenv("API_URL", "http://localhost:8080")
 
 CATEGORIES = {
     "01": "Food & Non-Alcoholic Beverages",

@@ -1,0 +1,1240 @@
+{
+  "version": 4,
+  "terraform_version": "1.15.1",
+  "serial": 35,
+  "lineage": "112284b1-9191-7049-b9ac-81013d736710",
+  "outputs": {},
+  "resources": [
+    {
+      "mode": "managed",
+      "type": "google_artifact_registry_repository",
+      "name": "main",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "cleanup_policies": [],
+            "cleanup_policy_dry_run": false,
+            "create_time": "2026-06-20T16:59:44.907158Z",
+            "description": "Docker images for Malaysia Inflation Intelligence",
+            "docker_config": [],
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "format": "DOCKER",
+            "id": "projects/modular-rush-495414-i2/locations/asia-southeast1/repositories/malaysia-inflation-intel",
+            "kms_key_name": "",
+            "labels": {},
+            "location": "asia-southeast1",
+            "maven_config": [],
+            "mode": "STANDARD_REPOSITORY",
+            "name": "malaysia-inflation-intel",
+            "project": "modular-rush-495414-i2",
+            "remote_repository_config": [],
+            "repository_id": "malaysia-inflation-intel",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "update_time": "2026-06-20T18:03:03.663411Z",
+            "virtual_repository_config": [],
+            "vulnerability_scanning_config": [
+              {
+                "enablement_config": "",
+                "enablement_state": "SCANNING_DISABLED",
+                "enablement_state_reason": "API containerscanning.googleapis.com is not enabled."
+              }
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_bigquery_dataset",
+      "name": "mart",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access": [
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "",
+                "user_by_email": "ammarzaki160802@gmail.com",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "projectOwners",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "READER",
+                "routine": [],
+                "special_group": "projectReaders",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "WRITER",
+                "routine": [],
+                "special_group": "projectWriters",
+                "user_by_email": "",
+                "view": []
+              }
+            ],
+            "creation_time": 1777999945520,
+            "dataset_id": "mart",
+            "default_collation": "",
+            "default_encryption_configuration": [],
+            "default_partition_expiration_ms": 0,
+            "default_table_expiration_ms": 0,
+            "delete_contents_on_destroy": false,
+            "description": "dbt mart models — analytical tables and ML features",
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "etag": "0MQ9vhKVlYS1QzyVNAIkvQ==",
+            "external_catalog_dataset_options": [],
+            "external_dataset_reference": [],
+            "friendly_name": "",
+            "id": "projects/modular-rush-495414-i2/datasets/mart",
+            "is_case_insensitive": false,
+            "labels": {},
+            "last_modified_time": 1777999945520,
+            "location": "asia-southeast1",
+            "max_time_travel_hours": "168",
+            "project": "modular-rush-495414-i2",
+            "resource_tags": {},
+            "self_link": "https://bigquery.googleapis.com/bigquery/v2/projects/modular-rush-495414-i2/datasets/mart",
+            "storage_billing_model": "",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_bigquery_dataset",
+      "name": "raw",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access": [
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "",
+                "user_by_email": "ammarzaki160802@gmail.com",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "projectOwners",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "READER",
+                "routine": [],
+                "special_group": "projectReaders",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "WRITER",
+                "routine": [],
+                "special_group": "projectWriters",
+                "user_by_email": "",
+                "view": []
+              }
+            ],
+            "creation_time": 1777999945522,
+            "dataset_id": "raw",
+            "default_collation": "",
+            "default_encryption_configuration": [],
+            "default_partition_expiration_ms": 0,
+            "default_table_expiration_ms": 0,
+            "delete_contents_on_destroy": false,
+            "description": "Raw DOSM and BNM data, loaded directly from GCS",
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "etag": "RgdmcnI2fkXhVG9IUf7cDA==",
+            "external_catalog_dataset_options": [],
+            "external_dataset_reference": [],
+            "friendly_name": "",
+            "id": "projects/modular-rush-495414-i2/datasets/raw",
+            "is_case_insensitive": false,
+            "labels": {},
+            "last_modified_time": 1777999945522,
+            "location": "asia-southeast1",
+            "max_time_travel_hours": "168",
+            "project": "modular-rush-495414-i2",
+            "resource_tags": {},
+            "self_link": "https://bigquery.googleapis.com/bigquery/v2/projects/modular-rush-495414-i2/datasets/raw",
+            "storage_billing_model": "",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_bigquery_dataset",
+      "name": "staging",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "access": [
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "",
+                "user_by_email": "ammarzaki160802@gmail.com",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "OWNER",
+                "routine": [],
+                "special_group": "projectOwners",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "READER",
+                "routine": [],
+                "special_group": "projectReaders",
+                "user_by_email": "",
+                "view": []
+              },
+              {
+                "condition": [],
+                "dataset": [],
+                "domain": "",
+                "group_by_email": "",
+                "iam_member": "",
+                "role": "WRITER",
+                "routine": [],
+                "special_group": "projectWriters",
+                "user_by_email": "",
+                "view": []
+              }
+            ],
+            "creation_time": 1777999945520,
+            "dataset_id": "staging",
+            "default_collation": "",
+            "default_encryption_configuration": [],
+            "default_partition_expiration_ms": 0,
+            "default_table_expiration_ms": 0,
+            "delete_contents_on_destroy": false,
+            "description": "dbt staging models — cleaned and typed",
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "etag": "VaCo6WhAbFLvRmaI6F2Y1w==",
+            "external_catalog_dataset_options": [],
+            "external_dataset_reference": [],
+            "friendly_name": "",
+            "id": "projects/modular-rush-495414-i2/datasets/staging",
+            "is_case_insensitive": false,
+            "labels": {},
+            "last_modified_time": 1777999945520,
+            "location": "asia-southeast1",
+            "max_time_travel_hours": "168",
+            "project": "modular-rush-495414-i2",
+            "resource_tags": {},
+            "self_link": "https://bigquery.googleapis.com/bigquery/v2/projects/modular-rush-495414-i2/datasets/staging",
+            "storage_billing_model": "",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19"
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_cloud_run_v2_service",
+      "name": "api",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "status": "tainted",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "binary_authorization": [],
+            "build_config": [],
+            "client": "",
+            "client_version": "",
+            "conditions": [
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:36.588649Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-api:latest' not found.",
+                "reason": "REVISION_FAILED",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "RoutesReady"
+              },
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:30.468954Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-api:latest' not found.",
+                "reason": "",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "ConfigurationsReady"
+              }
+            ],
+            "create_time": "2026-06-20T16:59:29.840125Z",
+            "creator": "ammarzaki160802@gmail.com",
+            "custom_audiences": [],
+            "delete_time": "",
+            "deletion_protection": true,
+            "description": "",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "etag": "\"CPGN29EGEMiUzZAD/cHJvamVjdHMvbW9kdWxhci1ydXNoLTQ5NTQxNC1pMi9sb2NhdGlvbnMvYXNpYS1zb3V0aGVhc3QxL3NlcnZpY2VzL2luZmxhdGlvbi1hcGk\"",
+            "expire_time": "",
+            "generation": "1",
+            "id": "projects/modular-rush-495414-i2/locations/asia-southeast1/services/inflation-api",
+            "ingress": "INGRESS_TRAFFIC_ALL",
+            "invoker_iam_disabled": false,
+            "labels": {},
+            "last_modifier": "ammarzaki160802@gmail.com",
+            "latest_created_revision": "projects/modular-rush-495414-i2/locations/asia-southeast1/services/inflation-api/revisions/inflation-api-00001-njz",
+            "latest_ready_revision": "",
+            "launch_stage": "GA",
+            "location": "asia-southeast1",
+            "name": "inflation-api",
+            "observed_generation": "1",
+            "project": "modular-rush-495414-i2",
+            "reconciling": false,
+            "scaling": [
+              {
+                "manual_instance_count": 0,
+                "min_instance_count": 0,
+                "scaling_mode": ""
+              }
+            ],
+            "template": [
+              {
+                "annotations": {},
+                "containers": [
+                  {
+                    "args": [],
+                    "base_image_uri": "",
+                    "build_info": [],
+                    "command": [],
+                    "depends_on": [],
+                    "env": [
+                      {
+                        "name": "GCP_PROJECT_ID",
+                        "value": "modular-rush-495414-i2",
+                        "value_source": []
+                      },
+                      {
+                        "name": "MODEL_GCS_PATH",
+                        "value": "models/cpi_forecast_20260619_194024.joblib",
+                        "value_source": []
+                      }
+                    ],
+                    "image": "asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-api:latest",
+                    "liveness_probe": [],
+                    "name": "",
+                    "ports": [
+                      {
+                        "container_port": 8080,
+                        "name": "http1"
+                      }
+                    ],
+                    "resources": [
+                      {
+                        "cpu_idle": false,
+                        "limits": {
+                          "cpu": "2",
+                          "memory": "2Gi"
+                        },
+                        "startup_cpu_boost": false
+                      }
+                    ],
+                    "startup_probe": [
+                      {
+                        "failure_threshold": 5,
+                        "grpc": [],
+                        "http_get": [
+                          {
+                            "http_headers": [],
+                            "path": "/health",
+                            "port": 8080
+                          }
+                        ],
+                        "initial_delay_seconds": 30,
+                        "period_seconds": 10,
+                        "tcp_socket": [],
+                        "timeout_seconds": 1
+                      }
+                    ],
+                    "volume_mounts": [],
+                    "working_dir": ""
+                  }
+                ],
+                "encryption_key": "",
+                "execution_environment": "",
+                "gpu_zonal_redundancy_disabled": false,
+                "labels": {},
+                "max_instance_request_concurrency": 160,
+                "node_selector": [],
+                "revision": "",
+                "scaling": [
+                  {
+                    "max_instance_count": 3,
+                    "min_instance_count": 0
+                  }
+                ],
+                "service_account": "vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+                "session_affinity": false,
+                "timeout": "300s",
+                "volumes": [],
+                "vpc_access": []
+              }
+            ],
+            "terminal_condition": [
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:36.588649Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-api:latest' not found.",
+                "reason": "REVISION_FAILED",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "Ready"
+              }
+            ],
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "traffic": [
+              {
+                "percent": 100,
+                "revision": "",
+                "tag": "",
+                "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+              }
+            ],
+            "traffic_statuses": [],
+            "uid": "1b0a62bf-2382-4ba8-ba72-d6eaf6231991",
+            "update_time": "2026-06-20T16:59:29.840125Z",
+            "uri": "",
+            "urls": [
+              "https://inflation-api-359684638464.asia-southeast1.run.app"
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "google_service_account.vertex"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_cloud_run_v2_service",
+      "name": "streamlit",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "status": "tainted",
+          "schema_version": 0,
+          "attributes": {
+            "annotations": {},
+            "binary_authorization": [],
+            "build_config": [],
+            "client": "",
+            "client_version": "",
+            "conditions": [
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:36.569377Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-app:latest' not found.",
+                "reason": "REVISION_FAILED",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "RoutesReady"
+              },
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:30.422786Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-app:latest' not found.",
+                "reason": "",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "ConfigurationsReady"
+              }
+            ],
+            "create_time": "2026-06-20T16:59:29.838670Z",
+            "creator": "ammarzaki160802@gmail.com",
+            "custom_audiences": [],
+            "delete_time": "",
+            "deletion_protection": true,
+            "description": "",
+            "effective_annotations": {},
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "etag": "\"CPGN29EGELCt9I8D/cHJvamVjdHMvbW9kdWxhci1ydXNoLTQ5NTQxNC1pMi9sb2NhdGlvbnMvYXNpYS1zb3V0aGVhc3QxL3NlcnZpY2VzL2luZmxhdGlvbi1hcHA\"",
+            "expire_time": "",
+            "generation": "1",
+            "id": "projects/modular-rush-495414-i2/locations/asia-southeast1/services/inflation-app",
+            "ingress": "INGRESS_TRAFFIC_ALL",
+            "invoker_iam_disabled": false,
+            "labels": {},
+            "last_modifier": "ammarzaki160802@gmail.com",
+            "latest_created_revision": "projects/modular-rush-495414-i2/locations/asia-southeast1/services/inflation-app/revisions/inflation-app-00001-zx8",
+            "latest_ready_revision": "",
+            "launch_stage": "GA",
+            "location": "asia-southeast1",
+            "name": "inflation-app",
+            "observed_generation": "1",
+            "project": "modular-rush-495414-i2",
+            "reconciling": false,
+            "scaling": [
+              {
+                "manual_instance_count": 0,
+                "min_instance_count": 0,
+                "scaling_mode": ""
+              }
+            ],
+            "template": [
+              {
+                "annotations": {},
+                "containers": [
+                  {
+                    "args": [],
+                    "base_image_uri": "",
+                    "build_info": [],
+                    "command": [],
+                    "depends_on": [],
+                    "env": [
+                      {
+                        "name": "API_URL",
+                        "value": "https://inflation-api-modular-rush-495414-i2.asia-southeast1.run.app",
+                        "value_source": []
+                      }
+                    ],
+                    "image": "asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-app:latest",
+                    "liveness_probe": [],
+                    "name": "",
+                    "ports": [
+                      {
+                        "container_port": 8080,
+                        "name": "http1"
+                      }
+                    ],
+                    "resources": [
+                      {
+                        "cpu_idle": false,
+                        "limits": {
+                          "cpu": "1",
+                          "memory": "512Mi"
+                        },
+                        "startup_cpu_boost": false
+                      }
+                    ],
+                    "startup_probe": [
+                      {
+                        "failure_threshold": 1,
+                        "grpc": [],
+                        "http_get": [],
+                        "initial_delay_seconds": 0,
+                        "period_seconds": 240,
+                        "tcp_socket": [
+                          {
+                            "port": 8080
+                          }
+                        ],
+                        "timeout_seconds": 240
+                      }
+                    ],
+                    "volume_mounts": [],
+                    "working_dir": ""
+                  }
+                ],
+                "encryption_key": "",
+                "execution_environment": "",
+                "gpu_zonal_redundancy_disabled": false,
+                "labels": {},
+                "max_instance_request_concurrency": 80,
+                "node_selector": [],
+                "revision": "",
+                "scaling": [
+                  {
+                    "max_instance_count": 2,
+                    "min_instance_count": 0
+                  }
+                ],
+                "service_account": "ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+                "session_affinity": false,
+                "timeout": "300s",
+                "volumes": [],
+                "vpc_access": []
+              }
+            ],
+            "terminal_condition": [
+              {
+                "execution_reason": "",
+                "last_transition_time": "2026-06-20T16:59:36.569377Z",
+                "message": "Image 'asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/inflation-app:latest' not found.",
+                "reason": "REVISION_FAILED",
+                "revision_reason": "",
+                "severity": "",
+                "state": "CONDITION_FAILED",
+                "type": "Ready"
+              }
+            ],
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "timeouts": null,
+            "traffic": [
+              {
+                "percent": 100,
+                "revision": "",
+                "tag": "",
+                "type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+              }
+            ],
+            "traffic_statuses": [],
+            "uid": "5951a85e-518a-450f-911e-d2fd6bc2a85a",
+            "update_time": "2026-06-20T16:59:29.838670Z",
+            "uri": "",
+            "urls": [
+              "https://inflation-app-359684638464.asia-southeast1.run.app"
+            ]
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjoxMjAwMDAwMDAwMDAwLCJkZWxldGUiOjEyMDAwMDAwMDAwMDAsInVwZGF0ZSI6MTIwMDAwMDAwMDAwMH19",
+          "dependencies": [
+            "google_service_account.ingestion"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "dbt_bq",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/bigquery.dataEditor/serviceAccount:dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/bigquery.dataEditor"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.dbt"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "dbt_bq_job",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/bigquery.jobUser/serviceAccount:dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/bigquery.jobUser"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.dbt"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "ingestion_bq",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/bigquery.dataEditor/serviceAccount:ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/bigquery.dataEditor"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.ingestion"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "ingestion_gcs",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/storage.objectAdmin/serviceAccount:ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/storage.objectAdmin"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.ingestion"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "vertex_ai",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/aiplatform.user/serviceAccount:vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/aiplatform.user"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.vertex"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_project_iam_member",
+      "name": "vertex_gcs",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "condition": [],
+            "etag": "BwZUslU5haA=",
+            "id": "modular-rush-495414-i2/roles/storage.objectViewer/serviceAccount:vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "role": "roles/storage.objectViewer"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "bnVsbA==",
+          "dependencies": [
+            "google_service_account.vertex"
+          ]
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "dbt",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "dbt-sa",
+            "create_ignore_already_exists": null,
+            "description": "",
+            "disabled": false,
+            "display_name": "dbt Transformation Service Account",
+            "email": "dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "id": "projects/modular-rush-495414-i2/serviceAccounts/dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "name": "projects/modular-rush-495414-i2/serviceAccounts/dbt-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "timeouts": null,
+            "unique_id": "106221269484593479113"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "ingestion",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "ingestion-sa",
+            "create_ignore_already_exists": null,
+            "description": "",
+            "disabled": false,
+            "display_name": "Ingestion Service Account",
+            "email": "ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "id": "projects/modular-rush-495414-i2/serviceAccounts/ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "name": "projects/modular-rush-495414-i2/serviceAccounts/ingestion-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "timeouts": null,
+            "unique_id": "103784706102871491806"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_service_account",
+      "name": "vertex",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 0,
+          "attributes": {
+            "account_id": "vertex-sa",
+            "create_ignore_already_exists": null,
+            "description": "",
+            "disabled": false,
+            "display_name": "Vertex AI Service Account",
+            "email": "vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "id": "projects/modular-rush-495414-i2/serviceAccounts/vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "member": "serviceAccount:vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "name": "projects/modular-rush-495414-i2/serviceAccounts/vertex-sa@modular-rush-495414-i2.iam.gserviceaccount.com",
+            "project": "modular-rush-495414-i2",
+            "timeouts": null,
+            "unique_id": "118288004550410782837"
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjozMDAwMDAwMDAwMDB9fQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "ml_artifacts",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 3,
+          "attributes": {
+            "autoclass": [],
+            "cors": [],
+            "custom_placement_config": [],
+            "default_event_based_hold": false,
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "enable_object_retention": false,
+            "encryption": [],
+            "force_destroy": false,
+            "hierarchical_namespace": [
+              {
+                "enabled": false
+              }
+            ],
+            "id": "modular-rush-495414-i2-ml-artifacts",
+            "ip_filter": [],
+            "labels": {},
+            "lifecycle_rule": [],
+            "location": "ASIA-SOUTHEAST1",
+            "logging": [],
+            "name": "modular-rush-495414-i2-ml-artifacts",
+            "project": "modular-rush-495414-i2",
+            "project_number": 359684638464,
+            "public_access_prevention": "inherited",
+            "requester_pays": false,
+            "retention_policy": [],
+            "rpo": null,
+            "self_link": "https://www.googleapis.com/storage/v1/b/modular-rush-495414-i2-ml-artifacts",
+            "soft_delete_policy": [
+              {
+                "effective_time": "2026-05-05T16:52:29.526Z",
+                "retention_duration_seconds": 604800
+              }
+            ],
+            "storage_class": "STANDARD",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "time_created": "2026-05-05T16:52:29.526Z",
+            "timeouts": null,
+            "uniform_bucket_level_access": false,
+            "updated": "2026-05-05T16:52:29.526Z",
+            "url": "gs://modular-rush-495414-i2-ml-artifacts",
+            "versioning": [],
+            "website": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsInJlYWQiOjI0MDAwMDAwMDAwMCwidXBkYXRlIjoyNDAwMDAwMDAwMDB9LCJzY2hlbWFfdmVyc2lvbiI6IjMifQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "processed",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 3,
+          "attributes": {
+            "autoclass": [],
+            "cors": [],
+            "custom_placement_config": [],
+            "default_event_based_hold": false,
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "enable_object_retention": false,
+            "encryption": [],
+            "force_destroy": false,
+            "hierarchical_namespace": [
+              {
+                "enabled": false
+              }
+            ],
+            "id": "modular-rush-495414-i2-processed",
+            "ip_filter": [],
+            "labels": {},
+            "lifecycle_rule": [],
+            "location": "ASIA-SOUTHEAST1",
+            "logging": [],
+            "name": "modular-rush-495414-i2-processed",
+            "project": "modular-rush-495414-i2",
+            "project_number": 359684638464,
+            "public_access_prevention": "inherited",
+            "requester_pays": false,
+            "retention_policy": [],
+            "rpo": null,
+            "self_link": "https://www.googleapis.com/storage/v1/b/modular-rush-495414-i2-processed",
+            "soft_delete_policy": [
+              {
+                "effective_time": "2026-05-05T16:52:27.612Z",
+                "retention_duration_seconds": 604800
+              }
+            ],
+            "storage_class": "STANDARD",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "time_created": "2026-05-05T16:52:27.612Z",
+            "timeouts": null,
+            "uniform_bucket_level_access": false,
+            "updated": "2026-05-05T16:52:27.612Z",
+            "url": "gs://modular-rush-495414-i2-processed",
+            "versioning": [],
+            "website": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsInJlYWQiOjI0MDAwMDAwMDAwMCwidXBkYXRlIjoyNDAwMDAwMDAwMDB9LCJzY2hlbWFfdmVyc2lvbiI6IjMifQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "raw",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 3,
+          "attributes": {
+            "autoclass": [],
+            "cors": [],
+            "custom_placement_config": [],
+            "default_event_based_hold": false,
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "enable_object_retention": false,
+            "encryption": [],
+            "force_destroy": false,
+            "hierarchical_namespace": [
+              {
+                "enabled": false
+              }
+            ],
+            "id": "modular-rush-495414-i2-raw",
+            "ip_filter": [],
+            "labels": {},
+            "lifecycle_rule": [
+              {
+                "action": [
+                  {
+                    "storage_class": "",
+                    "type": "Delete"
+                  }
+                ],
+                "condition": [
+                  {
+                    "age": 90,
+                    "created_before": "",
+                    "custom_time_before": "",
+                    "days_since_custom_time": 0,
+                    "days_since_noncurrent_time": 0,
+                    "matches_prefix": [],
+                    "matches_storage_class": [],
+                    "matches_suffix": [],
+                    "noncurrent_time_before": "",
+                    "num_newer_versions": 0,
+                    "send_age_if_zero": false,
+                    "send_days_since_custom_time_if_zero": false,
+                    "send_days_since_noncurrent_time_if_zero": false,
+                    "send_num_newer_versions_if_zero": false,
+                    "with_state": "ANY"
+                  }
+                ]
+              }
+            ],
+            "location": "ASIA-SOUTHEAST1",
+            "logging": [],
+            "name": "modular-rush-495414-i2-raw",
+            "project": "modular-rush-495414-i2",
+            "project_number": 359684638464,
+            "public_access_prevention": "inherited",
+            "requester_pays": false,
+            "retention_policy": [],
+            "rpo": null,
+            "self_link": "https://www.googleapis.com/storage/v1/b/modular-rush-495414-i2-raw",
+            "soft_delete_policy": [
+              {
+                "effective_time": "2026-05-05T16:52:28.576Z",
+                "retention_duration_seconds": 604800
+              }
+            ],
+            "storage_class": "STANDARD",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "time_created": "2026-05-05T16:52:28.576Z",
+            "timeouts": null,
+            "uniform_bucket_level_access": false,
+            "updated": "2026-05-05T16:52:28.576Z",
+            "url": "gs://modular-rush-495414-i2-raw",
+            "versioning": [
+              {
+                "enabled": true
+              }
+            ],
+            "website": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsInJlYWQiOjI0MDAwMDAwMDAwMCwidXBkYXRlIjoyNDAwMDAwMDAwMDB9LCJzY2hlbWFfdmVyc2lvbiI6IjMifQ=="
+        }
+      ]
+    },
+    {
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "tf_state",
+      "provider": "provider[\"registry.terraform.io/hashicorp/google\"]",
+      "instances": [
+        {
+          "schema_version": 3,
+          "attributes": {
+            "autoclass": [],
+            "cors": [],
+            "custom_placement_config": [],
+            "default_event_based_hold": false,
+            "effective_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "enable_object_retention": false,
+            "encryption": [],
+            "force_destroy": false,
+            "hierarchical_namespace": [
+              {
+                "enabled": false
+              }
+            ],
+            "id": "modular-rush-495414-i2-tf-state",
+            "ip_filter": [],
+            "labels": {},
+            "lifecycle_rule": [],
+            "location": "ASIA-SOUTHEAST1",
+            "logging": [],
+            "name": "modular-rush-495414-i2-tf-state",
+            "project": "modular-rush-495414-i2",
+            "project_number": 359684638464,
+            "public_access_prevention": "inherited",
+            "requester_pays": false,
+            "retention_policy": [],
+            "rpo": null,
+            "self_link": "https://www.googleapis.com/storage/v1/b/modular-rush-495414-i2-tf-state",
+            "soft_delete_policy": [
+              {
+                "effective_time": "2026-05-05T16:52:30.303Z",
+                "retention_duration_seconds": 604800
+              }
+            ],
+            "storage_class": "STANDARD",
+            "terraform_labels": {
+              "goog-terraform-provisioned": "true"
+            },
+            "time_created": "2026-05-05T16:52:30.303Z",
+            "timeouts": null,
+            "uniform_bucket_level_access": false,
+            "updated": "2026-05-05T16:52:30.303Z",
+            "url": "gs://modular-rush-495414-i2-tf-state",
+            "versioning": [
+              {
+                "enabled": true
+              }
+            ],
+            "website": []
+          },
+          "sensitive_attributes": [],
+          "identity_schema_version": 0,
+          "private": "eyJlMmJmYjczMC1lY2FhLTExZTYtOGY4OC0zNDM2M2JjN2M0YzAiOnsiY3JlYXRlIjo2MDAwMDAwMDAwMDAsInJlYWQiOjI0MDAwMDAwMDAwMCwidXBkYXRlIjoyNDAwMDAwMDAwMDB9LCJzY2hlbWFfdmVyc2lvbiI6IjMifQ=="
+        }
+      ]
+    }
+  ],
+  "check_results": null
+}
