@@ -309,8 +309,8 @@ def render_sidebar() -> tuple:
 
     # Mode selector
     mode = st.sidebar.radio(
-        "Choose mode",
-        options=["Personal Inflation Calculator", "Relocation Planner"],
+    "Choose mode",
+    options=["🏠 Home", "📊 Personal Inflation Calculator", "🗺️ Relocation Planner"],
         help="Personal: calculate your current inflation rate. Relocation: compare two states."
     )
     st.sidebar.divider()
@@ -367,6 +367,231 @@ def render_sidebar() -> tuple:
         st.sidebar.warning(f"Total: {total}% — add {100 - total}% more")
 
     return state, weights, mode, total
+
+def render_home():
+    """Landing page — explains what the app does and how to use it."""
+
+    # ── hero section ──────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style='text-align:center; padding: 40px 20px 20px 20px;'>
+        <div style='font-size:3rem;'>🇲🇾</div>
+        <h1 style='color:#1F4E79; font-size:2.2rem; margin-bottom:8px;'>
+            Malaysia Personal Inflation Intelligence
+        </h1>
+        <p style='color:#64748b; font-size:1.1rem; max-width:620px; margin:0 auto;'>
+            The government publishes one inflation number for the whole country.
+            But your inflation depends on <em>how you actually spend your money</em>.
+            This tool calculates yours.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── what is personal inflation ─────────────────────────────────────────────
+    st.subheader("💡 What is personal inflation?")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("""
+        Malaysia's official CPI is calculated using a **fixed national basket** —
+        an assumed average of how Malaysians spend money across 13 categories.
+
+        But if you spend **40% of your income on food** and food prices rise 5%,
+        you feel that much more than someone who spends only 20% on food.
+
+        **Your inflation = your spending pattern × actual price changes per category.**
+        """)
+
+    with col2:
+        st.markdown("""
+        <div style='background:#EFF6FF; border-left:4px solid #1F4E79;
+                    border-radius:8px; padding:16px 20px;'>
+            <b style='color:#1F4E79'>Example</b><br><br>
+            Government headline CPI: <b>2.1%</b><br><br>
+            Person A (heavy food spender): <b>2.8%</b> 📈<br>
+            Person B (heavy housing spender): <b>1.7%</b> 📉<br><br>
+            <span style='color:#64748b; font-size:0.9rem'>
+            Same month. Same country. Different reality.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── what you can do ────────────────────────────────────────────────────────
+    st.subheader("🛠️ What you can do with this app")
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        st.markdown("""
+        <div style='background:#F8FAFC; border:1px solid #E2E8F0;
+                    border-radius:12px; padding:24px;'>
+            <div style='font-size:2rem'>📊</div>
+            <h3 style='color:#1F4E79; margin:8px 0;'>Personal Inflation Calculator</h3>
+            <p style='color:#475569;'>
+                Tell us how you spend your money across 13 categories —
+                food, housing, transport, education, health, and more.
+                We calculate your personal inflation rate for your state,
+                explain what's driving it, and compare it to the state average.
+            </p>
+            <p style='color:#1F4E79; font-weight:600'>
+                Best for: understanding your current cost-of-living pressure.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_b:
+        st.markdown("""
+        <div style='background:#F8FAFC; border:1px solid #E2E8F0;
+                    border-radius:12px; padding:24px;'>
+            <div style='font-size:2rem'>🗺️</div>
+            <h3 style='color:#1F4E79; margin:8px 0;'>Relocation Planner</h3>
+            <p style='color:#475569;'>
+                Thinking of moving to KL, Johor, or another state?
+                Enter your current spending habits and your expected
+                lifestyle in the new state. We show you the cost
+                difference by category and estimate the salary you need
+                to maintain your standard of living.
+            </p>
+            <p style='color:#1F4E79; font-weight:600'>
+                Best for: evaluating a job offer in another state.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── how to use ────────────────────────────────────────────────────────────
+    st.subheader("📖 How to use this app — 3 steps")
+
+    step1, step2, step3 = st.columns(3)
+
+    with step1:
+        st.markdown("""
+        <div style='text-align:center; padding:16px;'>
+            <div style='font-size:2.5rem'>1️⃣</div>
+            <h4 style='color:#1F4E79'>Pick your mode</h4>
+            <p style='color:#475569; font-size:0.9rem'>
+                Choose <b>Personal Calculator</b> or <b>Relocation Planner</b>
+                from the sidebar on the left.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with step2:
+        st.markdown("""
+        <div style='text-align:center; padding:16px;'>
+            <div style='font-size:2.5rem'>2️⃣</div>
+            <h4 style='color:#1F4E79'>Set your spending profile</h4>
+            <p style='color:#475569; font-size:0.9rem'>
+                Use the sliders in the sidebar to set what percentage of your
+                monthly spending goes to each category.
+                They must add up to <b>100%</b>.
+                Start from a preset if you're not sure.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with step3:
+        st.markdown("""
+        <div style='text-align:center; padding:16px;'>
+            <div style='font-size:2.5rem'>3️⃣</div>
+            <h4 style='color:#1F4E79'>Read your results</h4>
+            <p style='color:#475569; font-size:0.9rem'>
+                See your personal inflation rate, which categories are
+                driving it up or down, and what economic factors the
+                AI model used to make the forecast.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── data and model ────────────────────────────────────────────────────────
+    st.subheader("📡 Where does the data come from?")
+
+    st.markdown("""
+    All data is sourced from official Malaysian government APIs — no third-party
+    or estimated data. Updated monthly.
+    """)
+
+    col_d1, col_d2, col_d3 = st.columns(3)
+
+    with col_d1:
+        st.markdown("""
+        <div style='background:#LTTEAL; padding:16px; border-radius:8px;
+                    border:1px solid #D1FAE5;'>
+            <b style='color:#065F46'>📊 DOSM</b><br>
+            <span style='color:#475569; font-size:0.9rem'>
+            Department of Statistics Malaysia —
+            monthly CPI by state and category,
+            Producer Price Index, and household
+            income survey data.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_d2:
+        st.markdown("""
+        <div style='background:#EFF6FF; padding:16px; border-radius:8px;
+                    border:1px solid #BFDBFE;'>
+            <b style='color:#1E40AF'>🏦 Bank Negara Malaysia</b><br>
+            <span style='color:#475569; font-size:0.9rem'>
+            Monthly interest rate data including
+            the Overnight Policy Rate (OPR) —
+            used as an economic signal in
+            the forecast model.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col_d3:
+        st.markdown("""
+        <div style='background:#FFF7ED; padding:16px; border-radius:8px;
+                    border:1px solid #FED7AA;'>
+            <b style='color:#92400E'>🤖 XGBoost ML Model</b><br>
+            <span style='color:#475569; font-size:0.9rem'>
+            Trained on 2010–2026 data across
+            208 state-category series.
+            97% accuracy in predicting the
+            direction of inflation movement.
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── disclaimer ─────────────────────────────────────────────────────────────
+    with st.expander("⚠️ Important disclaimer — please read"):
+        st.markdown("""
+        - This tool uses **state-level average data** from DOSM. Actual prices
+          vary by neighbourhood, shop, and lifestyle — this is a planning guide,
+          not a guarantee.
+        - Income and expenditure figures come from the **HIES 2022 survey**
+          and may not reflect current conditions precisely.
+        - The ML model forecasts are based on historical patterns and **do not
+          account for sudden policy changes** (e.g. new subsidies, emergency
+          price controls).
+        - This is an **independent research project** — not affiliated with
+          DOSM, BNM, or any government agency.
+        """)
+
+    st.divider()
+
+    # ── CTA ───────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style='text-align:center; padding:20px;'>
+        <p style='color:#475569; font-size:1rem; margin-bottom:16px;'>
+            Ready to find out your personal inflation rate?
+        </p>
+        <p style='color:#1F4E79; font-weight:600; font-size:1.1rem;'>
+            👈 Choose a mode from the sidebar to get started.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+
 
 # ── personal inflation calculator page ───────────────────────────────────────
 
@@ -909,7 +1134,9 @@ def main():
     state, weights, mode, total = render_sidebar()
 
     # Route to correct page based on mode
-    if mode == "Personal Inflation Calculator":
+    if mode == "🏠 Home":
+        render_home()
+    elif mode == "📊 Personal Inflation Calculator":
         render_personal_calculator(state, weights, total)
     else:
         render_relocation_planner(state, weights, total)

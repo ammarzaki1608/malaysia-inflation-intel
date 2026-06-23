@@ -9,8 +9,10 @@ __pycache__/
 **/.terraform/
 *.tfstate
 *.tfstate.backup
+*.tfstate.*
 *.tfvars
 .terraform.lock.hcl
+terraform.tfstate.*.backup
 
 # GCP credentials — NEVER commit these
 *.json
