@@ -8,8 +8,8 @@ resource "google_artifact_registry_repository" "main" {
 
 # ── FastAPI prediction service ────────────────────────────────────────────────
 resource "google_cloud_run_v2_service" "api" {
-  name     = "inflation-api"
-  location = var.region
+  name                = "inflation-api"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -55,8 +55,8 @@ resource "google_cloud_run_v2_service" "api" {
 
 # ── Streamlit app ─────────────────────────────────────────────────────────────
 resource "google_cloud_run_v2_service" "streamlit" {
-  name     = "inflation-app"
-  location = var.region
+  name                = "inflation-app"
+  location            = var.region
   deletion_protection = false
 
   template {
