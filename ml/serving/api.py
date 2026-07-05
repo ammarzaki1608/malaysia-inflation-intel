@@ -327,9 +327,18 @@ def get_feature_history(
     if not rows:
         return []
 
-    
     history = [dict(row) for row in rows]
     history.reverse()
+
+    # Forward-fill OPR nulls — BNM publishes with a 1-2 month lag,
+    # so the most recent months are often null. Carry the last
+    # known real rate forward, matching the training preprocessing.
+    last_known_opr = None
+    for row in history:
+        if row.get("opr_rate") is not None:
+            last_known_opr = row["opr_rate"]
+        else:
+            row["opr_rate"] = last_known_opr
 
     return history
 
