@@ -101,6 +101,23 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── helper functions ──────────────────────────────────────────────────────────
+@st.cache_data(ttl=300)
+def fetch_price_ratio(origin_state: str, destination_state: str, division: str) -> dict:
+    """Get the current price ratio between two states for one category."""
+    try:
+        response = httpx.get(
+            f"{API_URL}/price-ratio",
+            params={
+                "origin_state": origin_state,
+                "destination_state": destination_state,
+                "division": division,
+            },
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return None
 
 @st.cache_data(ttl=300)
 def fetch_prediction(state: str, weights: dict) -> dict:
@@ -152,6 +169,30 @@ def fetch_comparison(
         st.error(f"API error: {e}")
         return None
 
+@st.cache_data(ttl=300)
+def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
+    """
+    Call the FastAPI /forecast endpoint for a multi-month
+    recursive prediction of one category.
+    """
+    try:
+        response = httpx.get(
+            f"{API_URL}/forecast",
+            params={
+                "state": state,
+                "division": division,
+                "horizon_months": horizon_months,
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except httpx.TimeoutException:
+        st.error("Forecast request timed out. Please try again.")
+        return None
+    except Exception as e:
+        st.error(f"API error: {e}")
+        return None
 
 def weights_to_str_keys(weights: dict) -> dict:
     """Convert integer keys to string keys for API compatibility."""
@@ -230,6 +271,68 @@ def render_category_waterfall(categories: list) -> go.Figure:
     )
     return fig
 
+def render_forecast_chart(forecast_data: list, category_name: str, base_amount_rm: float = None) -> go.Figure:
+    """
+    Render a multi-month forecast with a widening confidence band.
+
+    If base_amount_rm is provided, converts the CPI index forecast
+    into an RM trend line by scaling proportionally to the index change.
+    Otherwise shows the raw CPI index values.
+    """
+    steps = [f"Month {f['step']}" for f in forecast_data]
+
+    if base_amount_rm is not None:
+        # Convert index values to RM by scaling relative to the
+        # first prediction's index — this turns an abstract index
+        # into "how much you'll actually spend"
+        first_index = forecast_data[0]["predicted_index"]
+        values      = [base_amount_rm * (f["predicted_index"] / first_index) for f in forecast_data]
+        lower       = [base_amount_rm * (f["lower_bound"]      / first_index) for f in forecast_data]
+        upper       = [base_amount_rm * (f["upper_bound"]      / first_index) for f in forecast_data]
+        y_title = "Projected spending (RM)"
+        hover_suffix = ""
+    else:
+        values = [f["predicted_index"] for f in forecast_data]
+        lower  = [f["lower_bound"] for f in forecast_data]
+        upper  = [f["upper_bound"] for f in forecast_data]
+        y_title = "CPI Index"
+        hover_suffix = ""
+
+    fig = go.Figure()
+
+    # Confidence band — drawn first so the line sits on top of it
+    fig.add_trace(go.Scatter(
+        x=steps + steps[::-1],
+        y=upper + lower[::-1],
+        fill="toself",
+        fillcolor="rgba(31, 78, 121, 0.15)",
+        line=dict(color="rgba(255,255,255,0)"),
+        hoverinfo="skip",
+        showlegend=False,
+        name="Confidence range",
+    ))
+
+    # Main forecast line
+    fig.add_trace(go.Scatter(
+        x=steps,
+        y=values,
+        mode="lines+markers",
+        line=dict(color="#1F4E79", width=3),
+        marker=dict(size=8),
+        name=category_name,
+    ))
+
+    fig.update_layout(
+        title=f"{category_name} — {len(forecast_data)}-month forecast",
+        yaxis_title=y_title,
+        height=380,
+        margin=dict(t=50, b=40, l=60, r=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+    )
+
+    return fig
 
 def render_shap_bar(shap_data: list, title: str) -> go.Figure:
     """
@@ -324,49 +427,63 @@ def render_sidebar() -> tuple:
 
     st.sidebar.divider()
 
-    # Profile preset selector
-    st.sidebar.subheader("Your spending profile")
-    st.sidebar.caption("How do you distribute your monthly spending?")
+    # ── salary + RM spending inputs (replaces % sliders) ──────────────────────
+    st.sidebar.subheader("💰 Your monthly budget")
+    st.sidebar.caption("Enter real amounts — we'll do the maths.")
 
-    preset = st.sidebar.selectbox(
-        "Start from a preset",
-        options=list(DEFAULT_PROFILES.keys()),
-        index=0,
+    monthly_salary = st.sidebar.number_input(
+        "Monthly salary (RM)",
+        min_value=0,
+        max_value=50000,
+        value=4500,
+        step=100,
     )
 
-    # Load preset weights
-    if preset != "Custom":
-        base_weights = DEFAULT_PROFILES[preset].copy()
-    else:
-        base_weights = {div: 10 for div in list(CATEGORIES.keys())[:10]}
+    st.sidebar.markdown("**Spending per category (RM):**")
 
-    # Sliders for each category
-    st.sidebar.markdown("**Adjust your spending percentages:**")
-    weights = {}
-    total   = 0
+    spending = {}
+    total_spent = 0
+
+    default_spending = {
+        "01": 900, "04": 700, "07": 400, "11": 300,
+        "10": 150, "06": 150, "03": 150, "09": 150,
+    }
 
     for div, name in CATEGORIES.items():
-        default_val = base_weights.get(div, 0)
-        val = st.sidebar.slider(
-            f"{name}",
+        default_val = default_spending.get(div, 0)
+        val = st.sidebar.number_input(
+            name,
             min_value=0,
-            max_value=60,
+            max_value=10000,
             value=default_val,
-            step=1,
-            key=f"slider_{div}",
+            step=50,
+            key=f"spend_{div}",
         )
-        weights[div] = val
-        total += val
+        spending[div] = val
+        total_spent += val
 
-    # Show total with colour feedback
-    if abs(total - 100) < 1:
-        st.sidebar.success(f"Total: {total}% ✓")
-    elif total > 100:
-        st.sidebar.error(f"Total: {total}% — reduce by {total - 100}%")
-    else:
-        st.sidebar.warning(f"Total: {total}% — add {100 - total}% more")
+    unallocated = monthly_salary - total_spent
 
-    return state, weights, mode, total
+    st.sidebar.divider()
+    st.sidebar.metric("Allocated", f"RM{total_spent:,}")
+    st.sidebar.metric("Unallocated (savings)", f"RM{unallocated:,}")
+
+    if unallocated < 0:
+        st.sidebar.error(
+            f"You've allocated RM{abs(unallocated):,} more than your salary."
+        )
+
+    st.sidebar.divider()
+
+    horizon_months = st.sidebar.radio(
+        "Forecast horizon",
+        options=[3, 6, 12],
+        index=1,
+        format_func=lambda x: f"{x} months",
+        horizontal=True,
+    )
+
+    return state, spending, monthly_salary, horizon_months, mode
 
 def render_home():
     """Landing page — explains what the app does and how to use it."""
@@ -428,15 +545,16 @@ def render_home():
         <div style='background:#F8FAFC; border:1px solid #E2E8F0;
                     border-radius:12px; padding:24px;'>
             <div style='font-size:2rem'>📊</div>
-            <h3 style='color:#1F4E79; margin:8px 0;'>Personal Inflation Calculator</h3>
+            <h3 style='color:#1F4E79; margin:8px 0;'>Budget Forecast</h3>
             <p style='color:#475569;'>
-                Tell us how you spend your money across 13 categories —
-                food, housing, transport, education, health, and more.
-                We calculate your personal inflation rate for your state,
-                explain what's driving it, and compare it to the state average.
+                Enter your salary and how much you spend per category in
+                ringgit. We project your spending 3, 6, or 12 months
+                ahead, show you how it compares to official inflation,
+                and flag which category is quietly eating into your
+                budget the most.
             </p>
             <p style='color:#1F4E79; font-weight:600'>
-                Best for: understanding your current cost-of-living pressure.
+                Best for: seeing what your money actually buys next year.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -449,10 +567,10 @@ def render_home():
             <h3 style='color:#1F4E79; margin:8px 0;'>Relocation Planner</h3>
             <p style='color:#475569;'>
                 Thinking of moving to KL, Johor, or another state?
-                Enter your current spending habits and your expected
-                lifestyle in the new state. We show you the cost
-                difference by category and estimate the salary you need
-                to maintain your standard of living.
+                We auto-scale your current spending using real price
+                differences between states, forecast both side by side
+                in ringgit, and estimate the salary you'd need to keep
+                your standard of living.
             </p>
             <p style='color:#1F4E79; font-weight:600'>
                 Best for: evaluating a job offer in another state.
@@ -473,8 +591,8 @@ def render_home():
             <div style='font-size:2.5rem'>1️⃣</div>
             <h4 style='color:#1F4E79'>Pick your mode</h4>
             <p style='color:#475569; font-size:0.9rem'>
-                Choose <b>Personal Calculator</b> or <b>Relocation Planner</b>
-                from the sidebar on the left.
+                Choose <b>Personal Inflation Calculator</b> or
+                <b>Relocation Planner</b> from the sidebar on the left.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -483,12 +601,12 @@ def render_home():
         st.markdown("""
         <div style='text-align:center; padding:16px;'>
             <div style='font-size:2.5rem'>2️⃣</div>
-            <h4 style='color:#1F4E79'>Set your spending profile</h4>
+            <h4 style='color:#1F4E79'>Enter your real numbers</h4>
             <p style='color:#475569; font-size:0.9rem'>
-                Use the sliders in the sidebar to set what percentage of your
-                monthly spending goes to each category.
-                They must add up to <b>100%</b>.
-                Start from a preset if you're not sure.
+                Type in your monthly salary and how much you actually
+                spend per category in <b>ringgit</b> — no percentages,
+                no guesswork. Pick how far ahead you want to forecast:
+                3, 6, or 12 months.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -499,9 +617,9 @@ def render_home():
             <div style='font-size:2.5rem'>3️⃣</div>
             <h4 style='color:#1F4E79'>Read your results</h4>
             <p style='color:#475569; font-size:0.9rem'>
-                See your personal inflation rate, which categories are
-                driving it up or down, and what economic factors the
-                AI model used to make the forecast.
+                See how your spending compares to official inflation,
+                which category is your biggest leak, and what your
+                monthly surplus looks like months from now.
             </p>
         </div>
         """, unsafe_allow_html=True)
@@ -568,11 +686,19 @@ def render_home():
         - This tool uses **state-level average data** from DOSM. Actual prices
           vary by neighbourhood, shop, and lifestyle — this is a planning guide,
           not a guarantee.
+        - Multi-month forecasts use **recursive prediction** — each month's
+          forecast is partly built on the previous month's forecast, so
+          accuracy naturally decreases the further out you look. Treat
+          12-month forecasts as directional, not precise.
+        - Destination spending in the Relocation Planner is **auto-scaled
+          using today's price ratio** between states — it assumes you'll
+          keep the same spending habits, which may not hold if your
+          lifestyle changes significantly.
         - Income and expenditure figures come from the **HIES 2022 survey**
           and may not reflect current conditions precisely.
-        - The ML model forecasts are based on historical patterns and **do not
-          account for sudden policy changes** (e.g. new subsidies, emergency
-          price controls).
+        - The official inflation figure shown for comparison is currently
+          a **fixed reference value**, not a live monthly figure — this
+          will be replaced with a live national CPI feed in a future update.
         - This is an **independent research project** — not affiliated with
           DOSM, BNM, or any government agency.
         """)
@@ -591,237 +717,298 @@ def render_home():
     </div>
     """, unsafe_allow_html=True)
 
-
-
-# ── personal inflation calculator page ───────────────────────────────────────
-
-def render_personal_calculator(state: str, weights: dict, total: int):
+def calculate_budget_forecast(
+    state: str,
+    spending: dict,
+    monthly_salary: int,
+    horizon_months: int,
+) -> dict:
     """
-    Main page for personal inflation calculator mode.
-    Shows gauge, category breakdown, SHAP explanation,
-    and income context.
+    Orchestrates the full budget forecast:
+    - Calls /forecast for each category the user has spending in
+    - Computes the household-level summary: felt vs headline inflation,
+      biggest leak/saving category, projected surplus
     """
-    st.title("Your Personal Inflation Rate")
+    active_categories = {k: v for k, v in spending.items() if v > 0}
+
+    if not active_categories:
+        return None
+
+    category_forecasts = {}
+    total_current = 0
+    total_projected_final_month = 0
+
+    for div, amount in active_categories.items():
+        result = fetch_forecast(state, div, horizon_months)
+        if result is None:
+            continue
+
+        forecast_list = result["forecast"]
+        first_index = forecast_list[0]["predicted_index"]
+        final_index = forecast_list[-1]["predicted_index"]
+
+        # Scale index change onto the user's actual RM amount for this category
+        projected_amounts = [
+            amount * (f["predicted_index"] / first_index) for f in forecast_list
+        ]
+
+        category_forecasts[div] = {
+            "category_name": CATEGORIES.get(div, div),
+            "current_rm": amount,
+            "projected_final_rm": round(projected_amounts[-1], 2),
+            "change_rm": round(projected_amounts[-1] - amount, 2),
+            "change_pct": round((final_index - first_index) / first_index * 100, 2),
+            "forecast_raw": forecast_list,
+            "projected_amounts": projected_amounts,
+        }
+
+        total_current += amount
+        total_projected_final_month += projected_amounts[-1]
+
+    if not category_forecasts:
+        return None
+
+    # ── household-level "felt" inflation ────────────────────────────────────
+    # Weighted average of category % changes, weighted by how much
+    # the user actually spends in each — this IS their personal
+    # inflation rate, just derived from RM inputs instead of % sliders
+    felt_inflation_pct = round(
+        (total_projected_final_month - total_current) / total_current * 100, 2
+    )
+
+    # ── leak / saving category — biggest mover in each direction ──────────────
+    sorted_by_change = sorted(
+        category_forecasts.items(),
+        key=lambda x: x[1]["change_pct"],
+        reverse=True,
+    )
+    biggest_leak = sorted_by_change[0]
+    biggest_saving = sorted_by_change[-1]
+
+    # ── surplus projection ──────────────────────────────────────────────────
+    current_surplus = monthly_salary - total_current
+    projected_surplus = monthly_salary - total_projected_final_month
+
+    return {
+        "category_forecasts": category_forecasts,
+        "total_current": round(total_current, 2),
+        "total_projected_final": round(total_projected_final_month, 2),
+        "felt_inflation_pct": felt_inflation_pct,
+        "biggest_leak": {
+            "name": biggest_leak[1]["category_name"],
+            "change_pct": biggest_leak[1]["change_pct"],
+        },
+        "biggest_saving": {
+            "name": biggest_saving[1]["category_name"],
+            "change_pct": biggest_saving[1]["change_pct"],
+        },
+        "current_surplus": round(current_surplus, 2),
+        "projected_surplus": round(projected_surplus, 2),
+        "horizon_months": horizon_months,
+    }
+
+# ── personal calculator page ───────────────────────────────────────
+
+def render_personal_calculator(
+    state: str,
+    spending: dict,
+    monthly_salary: int,
+    horizon_months: int,
+):
+    """
+    Budget Forecast page — replaces the old % based calculator.
+    Shows RM-based projections, felt vs headline inflation,
+    leak/saving categories, and surplus forecast.
+    """
+    st.title("📊 Your Budget Forecast")
     st.caption(
-        f"Based on official DOSM data · Latest data: April 2026 · State: {state}"
+        f"Based on your actual spending in {state} · "
+        f"{horizon_months}-month forecast · Latest data: April 2026"
     )
 
-    # Validate weights before calling API
-    if abs(total - 100) > 1:
+    total_spent = sum(spending.values())
+
+    if total_spent == 0:
+        st.info("Enter your spending per category in the sidebar to get started.")
+        st.stop()
+
+    if monthly_salary > 0 and total_spent > monthly_salary:
         st.warning(
-            f"Your spending weights add up to {total}%. "
-            "Please adjust the sliders in the sidebar to reach exactly 100% "
-            "before calculating."
+            "Your spending exceeds your salary — the forecast will still run, "
+            "but check your numbers in the sidebar."
         )
+
+    with st.spinner(f"Forecasting {horizon_months} months ahead..."):
+        result = calculate_budget_forecast(state, spending, monthly_salary, horizon_months)
+
+    if result is None:
+        st.error("Could not generate a forecast. Please try again.")
         st.stop()
 
-    # Filter zero weights and convert keys to strings
-    active_weights = weights_to_str_keys(
-        {k: v for k, v in weights.items() if v > 0}
-    )
+    # ── the validation sentence — leads the page ────────────────────────────
+    felt = result["felt_inflation_pct"]
+    headline_pct = 1.5  # TODO: pull this live from a national headline endpoint
 
-    if not active_weights:
-        st.info("Set your spending percentages in the sidebar to get started.")
-        st.stop()
+    direction_word = "higher" if felt > headline_pct else "lower"
+    validation_color = "#dc2626" if felt > headline_pct else "#16a34a"
 
-    # Call API
-    with st.spinner("Calculating your personal inflation rate..."):
-        result = fetch_prediction(state, active_weights)
+    st.markdown(f"""
+    <div class="summary-box" style="border-left-color:{validation_color}">
+        <strong>📢 The reality check</strong><br><br>
+        Official inflation is currently around <b>{headline_pct}%</b>.
+        Based on <b>your actual spending</b>, your personal inflation
+        rate over the next {horizon_months} months is projected at
+        <b style="color:{validation_color}">{felt:+.2f}%</b> —
+        {abs(felt - headline_pct):.1f} points {direction_word} than the
+        official number.
+    </div>
+    """, unsafe_allow_html=True)
 
-    if not result:
-        st.stop()
+    st.divider()
 
-    # ── top metrics row ───────────────────────────────────────────────────────
-    col1, col2, col3, col4 = st.columns(4)
-
-    personal_rate = result["personal_inflation_rate"]
-    headline_rate = result["headline_cpi_change"]
-    diff          = personal_rate - headline_rate
-    income        = result.get("income_context", {})
+    # ── top metrics row ──────────────────────────────────────────────────────
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        fig = render_inflation_gauge(personal_rate, "Your personal inflation")
-        st.plotly_chart(fig, use_container_width=True)
-
+        st.metric(
+            "Current monthly spending",
+            f"RM{result['total_current']:,.0f}",
+        )
     with col2:
-        fig = render_inflation_gauge(headline_rate, "State average inflation")
-        st.plotly_chart(fig, use_container_width=True)
-
+        delta_rm = result["total_projected_final"] - result["total_current"]
+        st.metric(
+            f"Projected spending (month {horizon_months})",
+            f"RM{result['total_projected_final']:,.0f}",
+            delta=f"{delta_rm:+,.0f} RM",
+            delta_color="inverse",
+        )
     with col3:
-        color = "positive" if diff > 0 else "negative"
-        direction = "above" if diff > 0 else "below"
+        surplus_delta = result["projected_surplus"] - result["current_surplus"]
+        st.metric(
+            "Projected monthly surplus",
+            f"RM{result['projected_surplus']:,.0f}",
+            delta=f"{surplus_delta:+,.0f} RM",
+            delta_color="normal",
+        )
+
+    st.divider()
+
+    # ── leak / saving callouts ────────────────────────────────────────────────
+    col_leak, col_save = st.columns(2)
+
+    with col_leak:
+        leak = result["biggest_leak"]
         st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value {color}">{diff:+.2f}%</div>
-            <div class="metric-label">You are {abs(diff):.2f}%
-            {direction} the state average</div>
+        <div style='background:#FEF2F2; border-left:4px solid #dc2626;
+                    border-radius:8px; padding:16px 20px;'>
+            <b style='color:#991B1B'>📈 Your biggest leak</b><br><br>
+            <b>{leak['name']}</b><br>
+            <span style='color:#7F1D1D'>
+            Rising {leak['change_pct']:+.1f}% over {horizon_months} months —
+            watch this category closely.
+            </span>
         </div>
         """, unsafe_allow_html=True)
 
-    with col4:
-        median = income.get("income_median")
-        band   = income.get("income_band", "N/A")
-        exp    = income.get("expenditure_mean")
+    with col_save:
+        save = result["biggest_saving"]
+        save_word = "falling" if save["change_pct"] < 0 else "rising slowest"
         st.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-value" style="font-size:1.4rem">
-                RM{median:,.0f}
-            </div>
-            <div class="metric-label">
-                {state} median income<br>
-                Income band: {band}<br>
-                Avg expenditure: RM{exp:,.0f}
-            </div>
+        <div style='background:#F0FDF4; border-left:4px solid #16a34a;
+                    border-radius:8px; padding:16px 20px;'>
+            <b style='color:#166534'>💚 Your best category</b><br><br>
+            <b>{save['name']}</b><br>
+            <span style='color:#14532D'>
+            {save_word.capitalize()} ({save['change_pct']:+.1f}%) —
+            this is where you're least exposed.
+            </span>
         </div>
         """, unsafe_allow_html=True)
 
     st.divider()
 
-    # ── spending profile + category breakdown ─────────────────────────────────
-    col_left, col_right = st.columns([1, 2])
+    # ── per-category forecast charts ────────────────────────────────────────
+    st.subheader("Category forecasts")
+    st.caption("How much you'll spend per category, with a widening confidence range the further out we forecast.")
 
-    with col_left:
-        st.subheader("Your spending profile")
-        fig = render_spending_profile_pie(weights)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_right:
-        st.subheader("Inflation by category")
-        fig = render_category_waterfall(result["category_breakdown"])
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-
-    # ── category detail table ─────────────────────────────────────────────────
-    st.subheader("Category breakdown")
-    st.caption(
-        "How much each spending category contributes to your "
-        "personal inflation rate"
+    sorted_cats = sorted(
+        result["category_forecasts"].items(),
+        key=lambda x: x[1]["current_rm"],
+        reverse=True,
     )
 
+    for div, cat_data in sorted_cats[:4]:  # show top 4 by spend to avoid clutter
+        fig = render_forecast_chart(
+            cat_data["forecast_raw"],
+            cat_data["category_name"],
+            base_amount_rm=cat_data["current_rm"],
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    if len(sorted_cats) > 4:
+        with st.expander(f"Show {len(sorted_cats) - 4} more categories"):
+            for div, cat_data in sorted_cats[4:]:
+                fig = render_forecast_chart(
+                    cat_data["forecast_raw"],
+                    cat_data["category_name"],
+                    base_amount_rm=cat_data["current_rm"],
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    st.divider()
+
+    # ── full category table ───────────────────────────────────────────────────
+    st.subheader("Full breakdown")
+
     table_data = []
-    for cat in result["category_breakdown"]:
+    for div, cat_data in sorted_cats:
         table_data.append({
-            "Category":           cat["category_name"],
-            "Your weight":        f"{cat['weight']:.0f}%",
-            "Current index":      f"{cat['current_index']:.1f}",
-            "Forecast index":     f"{cat['predicted_index']:.2f}",
-            "Price change":       f"{cat['pct_change']:+.2f}%",
-            "Your contribution":  f"{cat['weighted_contribution']:+.3f}%",
+            "Category": cat_data["category_name"],
+            "Current (RM)": f"RM{cat_data['current_rm']:,.0f}",
+            f"Projected month {horizon_months} (RM)": f"RM{cat_data['projected_final_rm']:,.0f}",
+            "Change": f"{cat_data['change_rm']:+,.0f} RM ({cat_data['change_pct']:+.1f}%)",
         })
 
     df = pd.DataFrame(table_data)
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Price change": st.column_config.TextColumn(
-                "Price change",
-                help="Forecasted % change in this category's CPI index"
-            ),
-            "Your contribution": st.column_config.TextColumn(
-                "Your contribution",
-                help="Price change × your spending weight"
-            ),
-        }
-    )
-
-    st.divider()
-
-    # ── SHAP explanation ──────────────────────────────────────────────────────
-    st.subheader("What is driving your inflation forecast?")
-    st.caption(
-        "SHAP values show which economic factors most influenced "
-        "this prediction. Higher = more influential."
-    )
-
-    # Use category-level SHAP aggregated across top categories
-    shap_agg: dict = {}
-    for cat in result["category_breakdown"]:
-        for sv in cat.get("shap_values", []):
-            feat = sv["feature"]
-            shap_agg[feat] = shap_agg.get(feat, 0.0) + abs(sv["value"])
-
-    shap_list = sorted(
-        [{"feature": k, "importance": round(v, 2)}
-         for k, v in shap_agg.items()],
-        key=lambda x: x["importance"],
-        reverse=True,
-    )[:5]
-
-    col_shap, col_explain = st.columns([1, 1])
-
-    with col_shap:
-        fig = render_shap_bar(shap_list, "Top 5 forecast drivers")
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_explain:
-        st.markdown("**What these features mean:**")
-        explanations = {
-            "cpi_ma_3":   "The 3-month CPI trend is the strongest signal — if prices have been rising steadily for 3 months, they are likely to continue rising.",
-            "cpi_lag_1":  "Last month's CPI value is a strong predictor — inflation is sticky and rarely reverses sharply in a single month.",
-            "cpi_lag_3":  "The CPI value 3 months ago captures medium-term momentum — whether inflation has been building or easing.",
-            "ppi_lag_3":  "Producer prices from 3 months ago predict consumer prices today — factories pass cost increases to consumers with a lag.",
-            "ppi_index":  "Current producer prices signal near-term consumer price direction.",
-            "opr_rate":   "BNM's interest rate influences borrowing costs and consumer spending, which dampens or accelerates inflation.",
-            "cpi_lag_12": "The CPI value 12 months ago captures seasonal patterns — food prices rise before Hari Raya every year.",
-            "cpi_ma_12":  "The 12-month trend shows structural inflation direction.",
-        }
-
-        for item in shap_list:
-            feat    = item["feature"]
-            explain = explanations.get(feat, "Economic indicator influencing the forecast.")
-            st.markdown(f"**{feat}** — {explain}")
-            st.markdown("")
-
-    st.divider()
-
-    # ── income context ────────────────────────────────────────────────────────
-    st.subheader(f"Income context — {state}")
-
-    col_a, col_b, col_c, col_d = st.columns(4)
-
-    with col_a:
-        st.metric(
-            "Median household income",
-            f"RM{income.get('income_median', 0):,.0f}/mo"
-        )
-    with col_b:
-        st.metric(
-            "Mean expenditure",
-            f"RM{income.get('expenditure_mean', 0):,.0f}/mo"
-        )
-    with col_c:
-        gini = income.get("gini", 0)
-        st.metric("Gini coefficient", f"{gini:.3f}")
-    with col_d:
-        poverty = income.get("poverty_rate", 0)
-        st.metric("Poverty rate", f"{poverty:.1f}%")
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
     st.caption(
-        "Income data from DOSM Household Income and Expenditure Survey (HIES) 2022. "
-        "CPI forecasts based on XGBoost model trained on DOSM data 2010–2026."
+        "⚠️ Forecasts use recursive prediction — accuracy naturally decreases "
+        "further into the horizon as the model builds on its own prior "
+        "predictions. Treat the widening range as a guide, not a guarantee."
     )
 
 # ── relocation planner page ───────────────────────────────────────────────────
 
-def render_relocation_planner(origin_state: str, weights: dict, total: int):
+def render_relocation_planner(
+    origin_state: str,
+    spending: dict,
+    monthly_salary: int,
+):
     """
-    Relocation planner page — compares personal inflation and cost
-    of living between two Malaysian states.
+    Relocation Planner — RM-based comparison between two states.
+
+    Auto-suggests destination spending by scaling origin RM amounts
+    by the current price ratio between states, then lets the user
+    adjust before running a full multi-month forecast comparison.
     """
     st.title("🏠 Relocation Cost Planner")
     st.caption(
-        "Compare your cost of living between two Malaysian states "
-        "using official DOSM and BNM data"
+        "Compare your real cost of living between two Malaysian states, "
+        "in ringgit — using official DOSM and BNM data"
     )
 
-    # Destination state selector
+    active_spending = {k: v for k, v in spending.items() if v > 0}
+
+    if not active_spending:
+        st.info("Enter your spending in the sidebar to get started.")
+        st.stop()
+
+    # ── destination state + horizon selectors ───────────────────────────────
     col_origin, col_arrow, col_dest = st.columns([2, 1, 2])
 
     with col_origin:
-        st.info(f"**Origin:** {origin_state}")
+        st.info(f"**Moving from:** {origin_state}")
 
     with col_arrow:
         st.markdown(
@@ -831,317 +1018,278 @@ def render_relocation_planner(origin_state: str, weights: dict, total: int):
 
     with col_dest:
         destination_state = st.selectbox(
-            "Destination state",
+            "Moving to",
             options=[s for s in STATES if s != origin_state],
             index=STATES.index("W.P. Kuala Lumpur")
             if origin_state != "W.P. Kuala Lumpur"
             else 0,
         )
 
+    horizon_months = st.radio(
+        "Forecast horizon",
+        options=[3, 6, 12],
+        index=1,
+        format_func=lambda x: f"{x} months",
+        horizontal=True,
+        key="reloc_horizon",
+    )
+
     st.divider()
 
-    # Destination spending profile
-    st.subheader("Expected spending pattern in destination")
+    # ── fetch price ratios for every active category ────────────────────────
+    st.subheader("Suggested spending in your new state")
     st.caption(
-        "Your spending habits will likely change when you move. "
-        "Adjust the sliders below to reflect your expected lifestyle "
-        f"in {destination_state}."
+        f"Auto-scaled from your {origin_state} spending using current "
+        f"{destination_state} prices. Adjust any amount if you expect "
+        f"your habits to change."
     )
 
-    dest_preset = st.selectbox(
-        "Start from a preset for destination",
-        options=list(DEFAULT_PROFILES.keys()),
-        index=2,
-        key="dest_preset",
-    )
+    destination_spending = {}
+    ratio_info = {}
 
-    if dest_preset != "Custom":
-        dest_base = DEFAULT_PROFILES[dest_preset].copy()
-    else:
-        dest_base = {div: 10 for div in list(CATEGORIES.keys())[:10]}
+    with st.spinner(f"Comparing prices between {origin_state} and {destination_state}..."):
+        for div, origin_amount in active_spending.items():
+            ratio_data = fetch_price_ratio(origin_state, destination_state, div)
 
-    # Destination sliders — two columns
-    dest_weights = {}
-    dest_total   = 0
+            if ratio_data:
+                ratio = ratio_data["ratio"]
+                pct_diff = ratio_data["pct_difference"]
+            else:
+                # Fallback if the ratio lookup fails for this category —
+                # assume no price difference rather than blocking the page
+                ratio = 1.0
+                pct_diff = 0.0
 
-    cols = st.columns(2)
-    for i, (div, name) in enumerate(CATEGORIES.items()):
-        with cols[i % 2]:
-            default_val = dest_base.get(div, 0)
-            val = st.slider(
-                f"{name}",
+            suggested_amount = round(origin_amount * ratio)
+            ratio_info[div] = {"ratio": ratio, "pct_diff": pct_diff}
+
+            destination_spending[div] = suggested_amount
+
+    # ── editable destination table ───────────────────────────────────────────
+    st.markdown("**Your destination budget (editable):**")
+
+    edited_spending = {}
+    for div, suggested in destination_spending.items():
+        col_name, col_origin_amt, col_dest_amt, col_diff = st.columns([2.5, 1.3, 1.5, 1.2])
+
+        with col_name:
+            st.markdown(f"{CATEGORIES.get(div, div)}")
+        with col_origin_amt:
+            st.markdown(f"RM{active_spending[div]:,.0f}")
+        with col_dest_amt:
+            new_val = st.number_input(
+                "dest",
                 min_value=0,
-                max_value=60,
-                value=default_val,
-                step=1,
-                key=f"dest_slider_{div}",
+                max_value=20000,
+                value=int(suggested),
+                step=25,
+                key=f"dest_amt_{div}",
+                label_visibility="collapsed",
             )
-            dest_weights[div] = val
-            dest_total += val
-
-    if abs(dest_total - 100) < 1:
-        st.success(f"Destination total: {dest_total}% ✓")
-    elif dest_total > 100:
-        st.error(f"Destination total: {dest_total}% — reduce by {dest_total - 100}%")
-    else:
-        st.warning(f"Destination total: {dest_total}% — add {100 - dest_total}% more")
+            edited_spending[div] = new_val
+        with col_diff:
+            pct = ratio_info[div]["pct_diff"]
+            color = "#dc2626" if pct > 0 else "#16a34a"
+            st.markdown(
+                f"<span style='color:{color}'>{pct:+.1f}%</span>",
+                unsafe_allow_html=True,
+            )
 
     st.divider()
-
-    # Validate before API call
-    if abs(total - 100) > 1:
-        st.warning(
-            f"Your origin spending weights add up to {total}%. "
-            "Please fix the sidebar sliders first."
-        )
+    # ── validate before running the full comparison ──────────────────────────
+    total_dest = sum(edited_spending.values())
+    if total_dest == 0:
+        st.warning("Set at least one destination spending amount above.")
         st.stop()
 
-    if abs(dest_total - 100) > 1:
-        st.warning(
-            f"Your destination spending weights add up to {dest_total}%. "
-            "Please adjust the destination sliders above."
-        )
+    if not st.button("🔍 Compare full forecast", type="primary"):
+        st.caption("Click above to run the full multi-month comparison.")
         st.stop()
 
-    # Call comparison API
-    origin_weights = weights_to_str_keys(
-        {k: v for k, v in weights.items() if v > 0}
-    )
-    dest_weights_clean = weights_to_str_keys(
-        {k: v for k, v in dest_weights.items() if v > 0}
-    )
+    # ── run /forecast for BOTH states, every active category ─────────────────
+    origin_results = {}
+    dest_results = {}
 
-    with st.spinner(
-        f"Comparing {origin_state} vs {destination_state}..."
-    ):
-        result = fetch_comparison(
-            origin_state,
-            destination_state,
-            origin_weights,
-            dest_weights_clean,
-        )
+    with st.spinner(f"Forecasting {horizon_months} months for both states..."):
+        for div, amount in active_spending.items():
+            origin_forecast = fetch_forecast(origin_state, div, horizon_months)
+            if origin_forecast:
+                origin_results[div] = origin_forecast
 
-    if not result:
+        for div, amount in edited_spending.items():
+            if amount <= 0:
+                continue
+            dest_forecast = fetch_forecast(destination_state, div, horizon_months)
+            if dest_forecast:
+                dest_results[div] = dest_forecast
+
+    if not origin_results or not dest_results:
+        st.error("Could not generate forecasts. Please try again.")
         st.stop()
+
+    # ── compute RM projections for both states ────────────────────────────────
+    def project_rm(forecast_result, base_amount):
+        forecast_list = forecast_result["forecast"]
+        first_index = forecast_list[0]["predicted_index"]
+        final_index = forecast_list[-1]["predicted_index"]
+        projected_amounts = [
+            base_amount * (f["predicted_index"] / first_index) for f in forecast_list
+        ]
+        return projected_amounts, forecast_list
+
+    origin_total_current = sum(active_spending.values())
+    origin_total_final = 0
+    dest_total_current = sum(edited_spending.values())
+    dest_total_final = 0
+
+    category_comparisons = {}
+
+    for div in origin_results:
+        if div not in dest_results:
+            continue
+
+        origin_amounts, origin_raw = project_rm(origin_results[div], active_spending[div])
+        dest_amounts, dest_raw = project_rm(dest_results[div], edited_spending[div])
+
+        origin_total_final += origin_amounts[-1]
+        dest_total_final += dest_amounts[-1]
+
+        category_comparisons[div] = {
+            "category_name": CATEGORIES.get(div, div),
+            "origin_amounts": origin_amounts,
+            "dest_amounts": dest_amounts,
+            "origin_raw": origin_raw,
+            "dest_raw": dest_raw,
+        }
 
     # ── summary banner ────────────────────────────────────────────────────────
+    cost_diff_rm = dest_total_final - origin_total_final
+    cost_diff_pct = (cost_diff_rm / origin_total_final * 100) if origin_total_final else 0
+    salary_needed = round(dest_total_final * 1.30)
+
+    direction = "more" if cost_diff_rm > 0 else "less"
     st.markdown(f"""
     <div class="summary-box">
         <strong>📊 Relocation Summary</strong><br><br>
-        {result['summary']}
+        By month {horizon_months}, your monthly spending in
+        <b>{destination_state}</b> is projected at
+        <b>RM{dest_total_final:,.0f}</b> — that's
+        <b>RM{abs(cost_diff_rm):,.0f} {direction}</b>
+        ({cost_diff_pct:+.1f}%) than staying in <b>{origin_state}</b>
+        (projected RM{origin_total_final:,.0f}).<br><br>
+        Recommended minimum salary in {destination_state}:
+        <b>RM{salary_needed:,.0f}/month</b> (includes a 30% buffer).
     </div>
     """, unsafe_allow_html=True)
 
-    # ── key metrics comparison ────────────────────────────────────────────────
-    st.subheader("Side-by-side comparison")
+    st.divider()
 
+    # ── side by side metrics ──────────────────────────────────────────────────
     col1, col2, col3 = st.columns(3)
-
-    origin_data = result["origin"]
-    dest_data   = result["destination"]
-    cost_diff   = result["cost_difference_pct"]
-    salary      = result["salary_needed"]
 
     with col1:
         st.metric(
-            f"Personal inflation — {origin_state}",
-            f"{origin_data['personal_inflation_rate']:+.2f}%",
+            f"{origin_state} — projected (month {horizon_months})",
+            f"RM{origin_total_final:,.0f}",
+            delta=f"{origin_total_final - origin_total_current:+,.0f} RM",
+            delta_color="inverse",
         )
-        st.metric(
-            f"Median income — {origin_state}",
-            f"RM{origin_data['income_context'].get('income_median', 0):,.0f}",
-        )
-        st.metric(
-            f"Mean expenditure — {origin_state}",
-            f"RM{origin_data['income_context'].get('expenditure_mean', 0):,.0f}",
-        )
-        st.metric(
-            f"Income band — {origin_state}",
-            origin_data["income_context"].get("income_band", "N/A"),
-        )
-
     with col2:
-        direction  = "higher" if cost_diff > 0 else "lower"
-        diff_color = "red" if cost_diff > 0 else "green"
-        st.markdown(
-            f"""
-            <div class="metric-card" style="margin-top:8px">
-                <div style="font-size:3rem">
-                    {"⬆️" if cost_diff > 0 else "⬇️"}
-                </div>
-                <div class="metric-value" style="color:{diff_color}">
-                    {abs(cost_diff):.2f}%
-                </div>
-                <div class="metric-label">
-                    inflation rate is {direction}<br>
-                    in {destination_state}
-                </div>
-                <br>
-                <div class="metric-value" style="font-size:1.6rem">
-                    RM{salary:,.0f}
-                </div>
-                <div class="metric-label">
-                    recommended minimum<br>
-                    monthly salary in {destination_state}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.metric(
+            f"{destination_state} — projected (month {horizon_months})",
+            f"RM{dest_total_final:,.0f}",
+            delta=f"{dest_total_final - dest_total_current:+,.0f} RM",
+            delta_color="inverse",
         )
-
     with col3:
         st.metric(
-            f"Personal inflation — {destination_state}",
-            f"{dest_data['personal_inflation_rate']:+.2f}%",
-        )
-        st.metric(
-            f"Median income — {destination_state}",
-            f"RM{dest_data['income_context'].get('income_median', 0):,.0f}",
-        )
-        st.metric(
-            f"Mean expenditure — {destination_state}",
-            f"RM{dest_data['income_context'].get('expenditure_mean', 0):,.0f}",
-        )
-        st.metric(
-            f"Income band — {destination_state}",
-            dest_data["income_context"].get("income_band", "N/A"),
+            "Extra monthly cost to relocate",
+            f"RM{cost_diff_rm:,.0f}",
+            delta=f"{cost_diff_pct:+.1f}%",
+            delta_color="inverse",
         )
 
     st.divider()
 
-    # ── gauge comparison ──────────────────────────────────────────────────────
-    col_g1, col_g2 = st.columns(2)
+    # ── per-category comparison charts ────────────────────────────────────────
+    st.subheader("Category-by-category comparison")
 
-    with col_g1:
-        fig = render_inflation_gauge(
-            origin_data["personal_inflation_rate"],
-            f"Personal inflation — {origin_state}",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col_g2:
-        fig = render_inflation_gauge(
-            dest_data["personal_inflation_rate"],
-            f"Personal inflation — {destination_state}",
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-
-    # ── category price comparison ─────────────────────────────────────────────
-    st.subheader("Price level comparison by category")
-    st.caption(
-        "Current CPI index values by category — higher index means "
-        "historically more expensive relative to the 2010 base year"
+    sorted_comparisons = sorted(
+        category_comparisons.items(),
+        key=lambda x: active_spending.get(x[0], 0),
+        reverse=True,
     )
 
-    origin_cats = {
-        c["division"]: c for c in origin_data["category_breakdown"]
-    }
-    dest_cats = {
-        c["division"]: c for c in dest_data["category_breakdown"]
-    }
+    for div, comp in sorted_comparisons[:4]:
+        steps = [f"Month {i+1}" for i in range(len(comp["origin_amounts"]))]
 
-    all_divs = sorted(
-        set(origin_cats.keys()) | set(dest_cats.keys())
-    )
-
-    comparison_rows = []
-    for div in all_divs:
-        o = origin_cats.get(div, {})
-        d = dest_cats.get(div, {})
-        if not o or not d:
-            continue
-
-        o_idx = o.get("current_index", 0)
-        d_idx = d.get("current_index", 0)
-        diff  = ((d_idx - o_idx) / o_idx * 100) if o_idx else 0
-
-        comparison_rows.append({
-            "Category":              o.get("category_name", div),
-            f"{origin_state} index": f"{o_idx:.1f}",
-            f"{destination_state} index": f"{d_idx:.1f}",
-            "Difference":            f"{diff:+.1f}%",
-            "More expensive in":     destination_state if diff > 0 else origin_state,
-        })
-
-    df_compare = pd.DataFrame(comparison_rows)
-    st.dataframe(
-        df_compare,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.divider()
-
-    # ── waterfall charts side by side ─────────────────────────────────────────
-    st.subheader("Inflation contribution by category")
-
-    col_wf1, col_wf2 = st.columns(2)
-
-    with col_wf1:
-        st.markdown(f"**{origin_state}**")
-        fig = render_category_waterfall(origin_data["category_breakdown"])
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=steps, y=comp["origin_amounts"],
+            mode="lines+markers", name=origin_state,
+            line=dict(color="#64748b", width=2, dash="dot"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=steps, y=comp["dest_amounts"],
+            mode="lines+markers", name=destination_state,
+            line=dict(color="#1F4E79", width=3),
+        ))
+        fig.update_layout(
+            title=comp["category_name"],
+            yaxis_title="Projected spending (RM)",
+            height=320,
+            margin=dict(t=50, b=30, l=50, r=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
         st.plotly_chart(fig, use_container_width=True)
 
-    with col_wf2:
-        st.markdown(f"**{destination_state}**")
-        fig = render_category_waterfall(dest_data["category_breakdown"])
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.divider()
-
-    # ── relocation checklist ──────────────────────────────────────────────────
-    st.subheader(f"Things to know before moving to {destination_state}")
-
-    dest_income = dest_data["income_context"]
-    origin_income = origin_data["income_context"]
-
-    dest_exp    = dest_income.get("expenditure_mean", 0) or 0
-    origin_exp  = origin_income.get("expenditure_mean", 0) or 0
-    exp_ratio   = (dest_exp / origin_exp) if origin_exp > 0 else 1
-
-    st.markdown(f"""
-    - **Cost of living multiplier:** spending in {destination_state} is
-      approximately **{exp_ratio:.1f}x** the cost of {origin_state}
-      based on mean household expenditure data
-    - **Income band difference:** {origin_state} is predominantly
-      **{origin_income.get('income_band', 'N/A')}** while
-      {destination_state} is predominantly
-      **{dest_income.get('income_band', 'N/A')}**
-    - **Gini coefficient:** {origin_state} {origin_income.get('gini', 0):.3f}
-      vs {destination_state} {dest_income.get('gini', 0):.3f}
-      — {'higher inequality in destination' if dest_income.get('gini',0) > origin_income.get('gini',0) else 'lower inequality in destination'}
-    - **Poverty rate:** {origin_state} {origin_income.get('poverty_rate', 0):.1f}%
-      vs {destination_state} {dest_income.get('poverty_rate', 0):.1f}%
-    - **Recommended salary:** at least **RM{salary:,.0f}/month** to cover
-      destination expenditure with a 30% savings buffer
-    """)
+    if len(sorted_comparisons) > 4:
+        with st.expander(f"Show {len(sorted_comparisons) - 4} more categories"):
+            for div, comp in sorted_comparisons[4:]:
+                steps = [f"Month {i+1}" for i in range(len(comp["origin_amounts"]))]
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(
+                    x=steps, y=comp["origin_amounts"],
+                    mode="lines+markers", name=origin_state,
+                    line=dict(color="#64748b", width=2, dash="dot"),
+                ))
+                fig.add_trace(go.Scatter(
+                    x=steps, y=comp["dest_amounts"],
+                    mode="lines+markers", name=destination_state,
+                    line=dict(color="#1F4E79", width=3),
+                ))
+                fig.update_layout(
+                    title=comp["category_name"],
+                    yaxis_title="Projected spending (RM)",
+                    height=320,
+                    margin=dict(t=50, b=30, l=50, r=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
     st.caption(
-        "⚠️ This tool uses state-level averages from DOSM HIES 2022 and "
-        "CPI data to April 2026. Actual costs vary by neighbourhood, "
-        "lifestyle, and individual circumstances. Use this as a planning "
-        "guide, not a guarantee."
+        "⚠️ Destination amounts are auto-suggested by scaling your current "
+        "spending using today's price ratio between states, then forecast "
+        "forward independently for each state. Forecasts use recursive "
+        "prediction — treat the further-out months as directional, not exact."
     )
 
 # ── main entry point ──────────────────────────────────────────────────────────
 
 def main():
-    """Main app entry point — routes between modes."""
+    state, spending, monthly_salary, horizon_months, mode = render_sidebar()
 
-    # Render sidebar and get user inputs
-    state, weights, mode, total = render_sidebar()
-
-    # Route to correct page based on mode
     if mode == "🏠 Home":
         render_home()
     elif mode == "📊 Personal Inflation Calculator":
-        render_personal_calculator(state, weights, total)
+        render_personal_calculator(state, spending, monthly_salary, horizon_months)
     else:
-        render_relocation_planner(state, weights, total)
+        render_relocation_planner(state, spending, monthly_salary)
 
-    # ── footer ────────────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("""
     <div style='text-align:center;color:#94a3b8;font-size:0.8rem;padding:10px'>

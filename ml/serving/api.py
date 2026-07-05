@@ -285,6 +285,172 @@ def predict_category(state: str, division: str) -> dict:
         "latest_date":     str(features.get("date", "")),
     }
 
+def get_feature_history(
+        state: str,
+        division: str,
+        months_back: int = 15,
+) -> list[dict]:
+    """
+    Pull the last N months of real feature data from BigQuery,
+    ordered oldest to newest. This is the real paper strip
+    we slide the prediction window across.
+    """
+    global bq_client
+    if bq_client is None:
+        bq_client = bigquery.Client(project=PROJECT_ID)
+
+    query = f"""
+        select
+            date, cpi_index,
+            cpi_lag_1, cpi_lag_3, cpi_lag_6, cpi_lag_12,
+            cpi_ma_3, cpi_ma_12,
+            ppi_index, ppi_lag_1, ppi_lag_2, ppi_lag_3,
+            opr_rate
+        from `{PROJECT_ID}.dbt_.mart_cpi_features`
+        where state = @state
+            and division = @division
+            and cpi_lag_1 is not null
+        order by date desc
+        limit @months_back
+    """
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("state", "STRING", state),
+            bigquery.ScalarQueryParameter("division", "STRING", division),
+            bigquery.ScalarQueryParameter("months_back", "INT64", months_back),
+        ]
+    )
+
+    rows = list(bq_client.query(query, job_config=job_config).result())
+
+    if not rows:
+        return []
+
+    history = [dict(row) for row in rows]
+    history.reverse()
+
+    return history
+
+def build_features_from_history(working_history: list[dict]) -> np.ndarray:
+    """
+    Build one model input row by reading backwards from the end
+    of working_history - the plucking boxes off the strip step.
+    
+    working_history[-1] is the most recent value (real or predicted).
+    working_history[-2] is one before that. And so on.
+    """
+    n = len(working_history)
+
+    def index_at(steps_back: int) -> float:
+        """Get the cpi_index value N steps back from the end."""
+        pos = n - steps_back
+        if pos < 0:
+            # Not enough history - fall back to the oldest value we have
+            pos = 0
+        return working_history[pos]["cpi_index"]
+    
+    cpi_lag_1  = index_at(1)
+    cpi_lag_3  = index_at(3)
+    cpi_lag_6  = index_at(6)
+    cpi_lag_12 = index_at(12)
+
+    # Rolling average - take the last 3 (or 12) values in the strip
+    last_3  = [working_history[i]["cpi_index"] for i in range(max(0, n-3), n)]
+    last_12 = [working_history[i]["cpi_index"] for i in range(max(0, n-12), n)]
+    cpi_ma_3  = sum(last_3) / len(last_3)
+    cpi_ma_12 = sum(last_12) / len(last_12)
+
+    # PPI and OPR — these are NOT part of the recursive loop.
+    # We hold them constant at their last known real value, since
+    # we have no model that forecasts PPI or OPR independently.
+    latest = working_history[-1]
+    ppi_index = latest.get("ppi_index", 0.0) or 0.0
+    ppi_lag_1 = latest.get("ppi_lag_1", 0.0) or 0.0
+    ppi_lag_2 = latest.get("ppi_lag_2", 0.0) or 0.0
+    ppi_lag_3 = latest.get("ppi_lag_3", 0.0) or 0.0
+    opr_rate  = latest.get("opr_rate", 0.0) or 0.0
+
+    row = [
+        cpi_lag_1, cpi_lag_3, cpi_lag_6, cpi_lag_12,
+        cpi_ma_3, cpi_ma_12,
+        ppi_index, ppi_lag_1, ppi_lag_2, ppi_lag_3,
+        opr_rate,
+    ]
+
+    return np.array([row])
+
+def append_prediction(
+    working_history: list[dict],
+    predicted_index: float,
+) -> list[dict]:
+    """
+    Tape a new prediction onto the end of the strip.
+
+    Predicted boxes copy PPI/OPR from the previous box, since
+    we hold those constant throughout the recursive loop.
+    """
+    previous_box = working_history[-1]
+
+    new_row = {
+        "cpi_index": predicted_index,
+        "ppi_index": previous_box.get("ppi_index", 0.0),
+        "ppi_lag_1": previous_box.get("ppi_lag_1", 0.0),
+        "ppi_lag_2": previous_box.get("ppi_lag_2", 0.0),
+        "ppi_lag_3": previous_box.get("ppi_lag_3", 0.0),
+        "opr_rate":  previous_box.get("opr_rate", 0.0),
+    }
+
+    return working_history + [new_row]
+
+def recursive_forecast(
+    state: str,
+    division: str,
+    horizon_months: int,
+) -> list[dict]:
+    """
+    Forecast N months ahead by calling the model repeatedly,
+    rebuilding lag features from previous predictions each step.
+
+    Returns a list of monthly predictions with a widening
+    confidence interval to reflect compounding uncertainty.
+    """
+    history = get_feature_history(state, division, months_back=15)
+
+    if len(history) < 13:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Not enough history for {state}/{division} to forecast"
+        )
+
+    working_history = history.copy()
+    forecasts = []
+
+    # Base uncertainty per step — grows the further we forecast,
+    # modelling the compounding error we discussed. This is a
+    # simple linear widening; a more rigorous approach would use
+    # the residual std from walk-forward CV at each horizon.
+    base_uncertainty_pct = 0.5
+
+    for step in range(1, horizon_months + 1):
+        X = build_features_from_history(working_history)
+        predicted_index = float(model.predict(X)[0])
+
+        uncertainty_pct = base_uncertainty_pct * step
+        lower_bound = predicted_index * (1 - uncertainty_pct / 100)
+        upper_bound = predicted_index * (1 + uncertainty_pct / 100)
+
+        forecasts.append({
+            "step": step,
+            "predicted_index": round(predicted_index, 3),
+            "lower_bound": round(lower_bound, 3),
+            "upper_bound": round(upper_bound, 3),
+            "confidence_band_pct": round(uncertainty_pct, 2),
+        })
+
+        working_history = append_prediction(working_history, predicted_index)
+
+    return forecasts
 
 def calculate_personal_inflation(
     state: str,
@@ -523,6 +689,76 @@ async def compare(request: ComparisonRequest):
         summary=summary,
     )
 
+@app.get("/forecast")
+async def forecast(
+    state: str,
+    division: str,
+    horizon_months: int = 6,
+):
+    """
+    Multi-month recursive CPI forecast for one state and category.
+
+    Example:
+        GET /forecast?state=Kedah&division=01&horizon_months=6
+
+    Returns a list of monthly predictions with widening
+    confidence bands.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded yet.")
+
+    if horizon_months not in (3, 6, 12):
+        raise HTTPException(
+            status_code=400,
+            detail="horizon_months must be 3, 6, or 12"
+        )
+
+    results = recursive_forecast(state, division, horizon_months)
+
+    return {
+        "state": state,
+        "division": division,
+        "category_name": CATEGORIES.get(division, division),
+        "horizon_months": horizon_months,
+        "forecast": results,
+    }
+
+@app.get("/price-ratio")
+async def price_ratio(
+    origin_state: str,
+    destination_state: str,
+    division: str,
+):
+    """
+    Returns the current price ratio between two states for one category.
+    Used to auto-scale a user's spending when comparing states.
+    """
+    try:
+        origin_features = get_latest_features(origin_state, division)
+        dest_features = get_latest_features(destination_state, division)
+    except HTTPException:
+        raise
+
+    origin_index = origin_features.get("cpi_index")
+    dest_index = dest_features.get("cpi_index")
+
+    if not origin_index or not dest_index:
+        raise HTTPException(
+            status_code=404,
+            detail="Could not find CPI data for one of the states"
+        )
+
+    ratio = dest_index / origin_index
+
+    return {
+        "origin_state": origin_state,
+        "destination_state": destination_state,
+        "division": division,
+        "origin_index": round(origin_index, 2),
+        "destination_index": round(dest_index, 2),
+        "ratio": round(ratio, 4),
+        "pct_difference": round((ratio - 1) * 100, 2),
+    }
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
