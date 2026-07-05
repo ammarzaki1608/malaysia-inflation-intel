@@ -770,18 +770,6 @@ async def price_ratio(
         "pct_difference": round((ratio - 1) * 100, 2),
     }
 
-@app.get("/debug-history")
-async def debug_history(state: str, division: str):
-    """
-    TEMPORARY debug endpoint — exposes raw feature history
-    to diagnose the local vs deployed discrepancy.
-    Remove this before final submission.
-    """
-    history = get_feature_history(state, division, months_back=15)
-    return {
-        "row_count": len(history),
-        "history": history,
-    }
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
