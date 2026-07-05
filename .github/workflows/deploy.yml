@@ -7,6 +7,7 @@ on:
     paths:
       - 'ml/serving/**'
       - 'app/streamlit/**'
+  workflow_dispatch:
 
 env:
   PROJECT_ID: modular-rush-495414-i2
