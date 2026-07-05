@@ -66,3 +66,21 @@ resource "google_project_iam_member" "vertex_bq_read" {
   role    = "roles/bigquery.dataViewer"
   member  = "serviceAccount:${google_service_account.vertex.email}"
 }
+
+resource "google_project_iam_member" "ingestion_artifact_registry" {
+  project = var.project_id
+  role    = "roles/artifactregistry.writer"
+  member  = "serviceAccount:${google_service_account.ingestion.email}"
+}
+
+resource "google_project_iam_member" "ingestion_run_admin" {
+  project = var.project_id
+  role    = "roles/run.admin"
+  member  = "serviceAccount:${google_service_account.ingestion.email}"
+}
+
+resource "google_project_iam_member" "ingestion_sa_user" {
+  project = var.project_id
+  role    = "roles/iam.serviceAccountUser"
+  member  = "serviceAccount:${google_service_account.ingestion.email}"
+}

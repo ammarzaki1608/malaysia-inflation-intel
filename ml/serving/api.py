@@ -327,6 +327,7 @@ def get_feature_history(
     if not rows:
         return []
 
+    
     history = [dict(row) for row in rows]
     history.reverse()
 
