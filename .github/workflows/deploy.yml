@@ -17,6 +17,8 @@ jobs:
   deploy-api:
     name: Deploy FastAPI service
     runs-on: ubuntu-latest
+    outputs:
+      api_url: ${{ steps.get-url.outputs.api_url }}
 
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +44,12 @@ jobs:
             --region ${{ env.REGION }} \
             --platform managed \
             --quiet
+
+      - name: Get deployed API URL
+        id: get-url
+        run: |
+          URL=$(gcloud run services describe inflation-api --region ${{ env.REGION }} --format 'value(status.url)')
+          echo "api_url=$URL" >> "$GITHUB_OUTPUT"
 
   deploy-streamlit:
     name: Deploy Streamlit app
@@ -71,5 +79,5 @@ jobs:
             --image ${{ env.REGISTRY }}/${{ env.PROJECT_ID }}/malaysia-inflation-intel/inflation-app:latest \
             --region ${{ env.REGION }} \
             --platform managed \
-            --set-env-vars API_URL=https://inflation-api-${{ env.PROJECT_ID }}.${{ env.REGION }}.run.app \
+            --set-env-vars API_URL=${{ needs.deploy-api.outputs.api_url }} \
             --quiet
