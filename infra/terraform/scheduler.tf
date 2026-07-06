@@ -45,7 +45,7 @@ resource "google_project_iam_member" "scheduler_run_invoker" {
 resource "google_cloud_scheduler_job" "monthly_pipeline_trigger" {
   name      = "monthly-data-pipeline-trigger"
   region    = var.region
-  schedule  = "0 3 3 * *"  # 3:00 AM UTC, on the 3rd day of every month
+  schedule  = "0 3 3 * *" # 3:00 AM UTC, on the 3rd day of every month
   time_zone = "UTC"
 
   http_target {
