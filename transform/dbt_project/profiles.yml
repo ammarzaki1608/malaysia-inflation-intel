@@ -1,0 +1,10 @@
+dbt_project:
+  target: prod
+  outputs:
+    prod:
+      type: bigquery
+      method: oauth
+      project: modular-rush-495414-i2
+      dataset: dbt_
+      threads: 4
+      location: asia-southeast1

@@ -29,6 +29,12 @@ resource "google_project_iam_member" "ingestion_bq" {
   member  = "serviceAccount:${google_service_account.ingestion.email}"
 }
 
+resource "google_project_iam_member" "ingestion_bq_job" {
+  project = var.project_id
+  role    = "roles/bigquery.jobUser"
+  member  = "serviceAccount:${google_service_account.ingestion.email}"
+}
+
 # dbt SA — can read/write BigQuery
 resource "google_project_iam_member" "dbt_bq" {
   project = var.project_id
