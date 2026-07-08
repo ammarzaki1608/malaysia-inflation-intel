@@ -307,6 +307,8 @@ def recursive_forecast(
             detail=f"Not enough history for {state}/{division} to forecast"
         )
 
+    latest_real_date = str(history[-1]["date"])
+
     working_history = history.copy()
     forecasts = []
 
@@ -334,7 +336,10 @@ def recursive_forecast(
 
         working_history = append_prediction(working_history, predicted_index)
 
-    return forecasts
+    return {
+        "forecasts": forecasts,
+        "latest_real_date": latest_real_date,
+    }
      
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
@@ -397,14 +402,15 @@ async def forecast(
             detail="horizon_months must be 3, 6, or 12"
         )
 
-    results = recursive_forecast(state, division, horizon_months)
+    result = recursive_forecast(state, division, horizon_months)
 
     return {
         "state": state,
         "division": division,
         "category_name": CATEGORIES.get(division, division),
         "horizon_months": horizon_months,
-        "forecast": results,
+        "forecast": result["forecasts"],
+        "latest_real_date": result["latest_real_date"],
     }
 
 @app.get("/price-ratio")
@@ -455,6 +461,50 @@ async def price_ratio(
         "pct_difference": round((ratio - 1) * 100, 2),
     }
 
+@app.get("/headline-inflation")
+@limiter.limit("30/minute")
+async def headline_inflation(request: Request):
+    """
+    Returns the current national headline CPI year-on-year change,
+    computed from the official raw.cpi_national table.
+
+    This replaces the previously hardcoded 1.5% reference value
+    used throughout the app for "official inflation" comparisons.
+    """
+    global bq_client
+    if bq_client is None:
+        bq_client = bigquery.Client(project=PROJECT_ID)
+
+    query = f"""
+        select date, index
+        from `{PROJECT_ID}.raw.cpi_national`
+        where division = 'overall'
+        order by date desc
+        limit 13
+    """
+
+    rows = list(bq_client.query(query).result())
+
+    if len(rows) < 13:
+        raise HTTPException(
+            status_code=404,
+            detail="Not enough national CPI history to compute headline inflation"
+        )
+
+    rows = [dict(r) for r in rows]
+    latest = rows[0]
+    year_ago = rows[12]
+
+    yoy_change_pct = round(
+        (latest["index"] - year_ago["index"]) / year_ago["index"] * 100,
+        2
+    )
+
+    return {
+        "headline_inflation_pct": yoy_change_pct,
+        "latest_date": str(latest["date"]),
+        "compared_to_date": str(year_ago["date"]),
+    }
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":

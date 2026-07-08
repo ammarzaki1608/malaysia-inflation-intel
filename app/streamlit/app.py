@@ -225,6 +225,20 @@ def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
     except Exception as e:
         st.error(f"API error: {e}")
         return None
+    
+@st.cache_data(ttl=3600)
+def fetch_headline_inflation() -> dict:
+    """
+    Get the current national headline CPI year-on-year change.
+    Cached for 1 hour since this changes at most once a month.
+    """
+    try:
+        response = httpx.get(f"{API_URL}/headline-inflation", timeout=15.0)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[WARNING] fetch_headline_inflation failed: {e}")
+        return None
 
 def render_forecast_chart(forecast_data: list, category_name: str, base_amount_rm: float = None) -> go.Figure:
     """
@@ -426,7 +440,7 @@ def render_home(t, lang):
         - Multi-month forecasts use **recursive prediction** — each month's forecast is partly built on the previous month's forecast, so accuracy naturally decreases the further out you look. Treat 12-month forecasts as directional, not precise.
         - Destination spending in the Relocation Planner is **auto-scaled using today's price ratio** between states — it assumes you'll keep the same spending habits, which may not hold if your lifestyle changes significantly.
         - Income and expenditure figures come from the **HIES 2022 survey** and may not reflect current conditions precisely.
-        - The official inflation figure shown for comparison is currently a **fixed reference value**, not a live monthly figure — this will be replaced with a live national CPI feed in a future update.
+        - The official inflation figure shown for comparison is pulled **live from official DOSM national CPI data**, comparing the most recent published month against the same month one year earlier.
         - This is an **independent research project** — not affiliated with DOSM, BNM, or any government agency.
         """
     else:
@@ -469,7 +483,7 @@ def render_home(t, lang):
         - Unjuran berbilang bulan menggunakan **kaedah ramalan rekursif** — unjuran bagi setiap bulan sebahagiannya terbina daripada unjuran bulan sebelumnya, justeru ketepatannya secara semula jadi akan menurun apabila tempoh unjuran semakin jauh. Jadikan unjuran 12 bulan sebagai panduan asas (indikatif), bukan nilai yang tepat.
         - Perbelanjaan destinasi dalam Perancang Perpindahan **dilaraskan secara automatik menggunakan nisbah harga semasa** antara negeri — fungsi ini mengandaikan anda mengekalkan corak perbelanjaan yang sama, yang mungkin tidak tepat sekiranya gaya hidup anda berubah secara ketara.
         - Angka pendapatan dan perbelanjaan diambil daripada **Penyiasatan HIES 2022** (Penyiasatan Pendapatan dan Perbelanjaan Isi Rumah) dan mungkin tidak mencerminkan keadaan semasa dengan tepat.
-        - Angka inflasi rasmi yang dipaparkan untuk tujuan perbandingan pada masa ini merupakan **nilai rujukan tetap**, dan bukan angka bulanan masa nyata (live) — ia akan digantikan dengan suapan data CPI kebangsaan masa nyata dalam kemas kini akan datang.
+        "- Angka inflasi rasmi yang dipaparkan untuk tujuan perbandingan diperoleh **secara lansung daripada data CPI kebangsaan rasmi DOSM**, dengan membandingkan data bulan terkini yang diterbitkan dengan bulan yang sama pada tahun sebelumnya."
         - Ini merupakan **projek penyelidikan bebas** — dan tidak mempunyai sebarang kaitan dengan DOSM, BNM, atau mana-mana agensi kerajaan.
         """
 
@@ -633,11 +647,15 @@ def calculate_budget_forecast(
     category_forecasts = {}
     total_current = 0
     total_projected_final_month = 0
+    latest_real_date = None
 
     for div, amount in active_categories.items():
         result = fetch_forecast(state, div, horizon_months)
         if result is None:
             continue
+        
+        if latest_real_date is None:
+            latest_real_date = result.get("latest_real_date")
 
         forecast_list = result["forecast"]
         first_index = forecast_list[0]["predicted_index"]
@@ -701,6 +719,7 @@ def calculate_budget_forecast(
         "current_surplus": round(current_surplus, 2),
         "projected_surplus": round(projected_surplus, 2),
         "horizon_months": horizon_months,
+        "latest_real_date": latest_real_date,
     }
 
 # ── personal calculator page ───────────────────────────────────────
@@ -714,13 +733,6 @@ def render_personal_calculator(
     lang: str,
 ):
     st.title(t["budget_forecast_title"])
-
-    caption_text = (
-        f"Based on your actual spending in {state} · {horizon_months}-month forecast · Latest data: April 2026"
-        if lang == "en" else
-        f"Berdasarkan perbelanjaan sebenar anda di {state} · Ramalan {horizon_months} bulan · Data terkini: April 2026"
-    )
-    st.caption(caption_text)
 
     total_spent = sum(spending.values())
 
@@ -737,16 +749,106 @@ def render_personal_calculator(
         )
         st.warning(warn_text)
 
-    spinner_text = f"Forecasting {horizon_months} months ahead..." if lang == "en" else f"Meramal {horizon_months} bulan akan datang..."
-    with st.spinner(spinner_text):
-        result = calculate_budget_forecast(state, spending, monthly_salary, horizon_months, lang)
+    generate_label = "🚀 Generate My Forecast" if lang == "en" else "🚀 Jana Ramalan Saya"
+    generate_hint = (
+        "Adjust your salary and spending in the sidebar, then click above to generate your personalised report."
+        if lang == "en" else
+        "Laraskan gaji dan perbelanjaan anda di bar sisi, kemudian klik butang di atas untuk menjana laporan peribadi anda."
+    )
+    changed_hint = (
+        "⚠️ You've changed your inputs — the report below is based on your previous numbers. Click Generate again to refresh it."
+        if lang == "en" else
+        "⚠️ Anda telah menukar input — laporan di bawah adalah berdasarkan angka sebelumnya. Klik Jana semula untuk mengemas kininya."
+    )
+
+    current_inputs_snapshot = (state, monthly_salary, horizon_months, tuple(sorted(spending.items())))
+
+    if "calculator_generated" not in st.session_state:
+        st.session_state.calculator_generated = False
+    if "calculator_last_inputs" not in st.session_state:
+        st.session_state.calculator_last_inputs = None
+    if "calculator_result" not in st.session_state:
+        st.session_state.calculator_result = None
+
+    inputs_changed = (
+        st.session_state.calculator_generated
+        and st.session_state.calculator_last_inputs is not None
+        and st.session_state.calculator_last_inputs != current_inputs_snapshot
+    )
+
+    if st.button(generate_label, type="primary", use_container_width=True):
+        st.session_state.calculator_generated = True
+        st.session_state.calculator_last_inputs = current_inputs_snapshot
+        # Force a fresh calculation on this exact click
+        with st.spinner(f"Forecasting {horizon_months} months ahead..." if lang == "en" else f"Meramal {horizon_months} bulan akan datang..."):
+            st.session_state.calculator_result = calculate_budget_forecast(
+                state, spending, monthly_salary, horizon_months, lang
+            )
+        inputs_changed = False  # freshly regenerated, so no longer stale
+
+    if not st.session_state.calculator_generated:
+        st.info(generate_hint)
+        st.stop()
+
+    if inputs_changed:
+        st.warning(changed_hint)
+
+    result = st.session_state.calculator_result
 
     if result is None:
         st.error("Could not generate a forecast. Please try again." if lang == "en" else "Ramalan tidak dapat dijana. Sila cuba lagi.")
         st.stop()
 
+    latest_date_display = result.get("latest_real_date", "—")
+
+    caption_text = (
+        f"Based on your actual spending in {state} · {horizon_months}-month forecast · Latest data: {latest_date_display}"
+        if lang == "en" else
+        f"Berdasarkan perbelanjaan sebenar anda di {state} · Ramalan {horizon_months} bulan · Data terkini: {latest_date_display}"
+    )
+    st.caption(caption_text)
+
+    if inputs_changed:
+        st.warning(changed_hint)
+
+    # ── Report header — gives the output a clear name and identity ─────────
+    report_title = "📄 Your Personal Inflation Report" if lang == "en" else "📄 Laporan Inflasi Peribadi Anda"
+    st.subheader(report_title)
+
+    # ── Plain-language interpretation — tells the user what the number means ─
     felt = result["felt_inflation_pct"]
-    headline_pct = 1.5
+
+    headline_data = fetch_headline_inflation()
+    headline_pct = headline_data["headline_inflation_pct"] if headline_data else 1.5
+    gap = abs(felt - headline_pct)
+
+    if gap < 0.5:
+        interpretation = (
+            "Your personal inflation is close to the national average — no urgent action needed, but it's worth keeping an eye on the category flagged below."
+            if lang == "en" else
+            "Inflasi peribadi anda hampir sama dengan purata kebangsaan — tiada tindakan segera diperlukan, tetapi elok pantau kategori yang dikenal pasti di bawah."
+        )
+        interp_color = "#0F6E5C"
+    elif felt > headline_pct:
+        interpretation = (
+            "Your personal inflation is running noticeably higher than the national average — the category flagged as your biggest leak below is worth addressing first."
+            if lang == "en" else
+            "Inflasi peribadi anda jauh lebih tinggi berbanding purata kebangsaan — kategori yang dikenal pasti sebagai paling banyak makan bajet di bawah wajar ditangani dahulu."
+        )
+        interp_color = "#dc2626"
+    else:
+        interpretation = (
+            "Your personal inflation is running lower than the national average — your spending pattern is currently working in your favour."
+            if lang == "en" else
+            "Inflasi peribadi anda lebih rendah berbanding purata kebangsaan — corak perbelanjaan anda pada masa ini memberi manfaat kepada anda."
+        )
+        interp_color = "#16a34a"
+
+    st.markdown(f"""
+    <p style='color:{interp_color}; font-size:1.05rem; font-weight:500; margin-bottom:16px;'>
+        {interpretation}
+    </p>
+    """, unsafe_allow_html=True)
 
     direction_word = ("higher" if felt > headline_pct else "lower") if lang == "en" else ("lebih tinggi" if felt > headline_pct else "lebih rendah")
     validation_color = "#dc2626" if felt > headline_pct else "#16a34a"
@@ -979,31 +1081,75 @@ def render_relocation_planner(
 
     st.divider()
 
-    # ── fetch price ratios for every active category ────────────────────────
+# ── fetch price ratios for every active category ────────────────────────
     st.subheader(suggested_header)
     st.caption(suggested_caption.format(origin=origin_state, dest=destination_state))
 
-    destination_spending = {}
-    ratio_info = {}
+    fetch_ratios_label = "📊 Get Suggested Spending" if lang == "en" else "📊 Dapatkan Cadangan Perbelanjaan"
+    fetch_ratios_hint = (
+        "Confirm your destination state above, then click here to see auto-scaled spending suggestions."
+        if lang == "en" else
+        "Sahkan negeri destinasi anda di atas, kemudian klik di sini untuk melihat cadangan perbelanjaan yang dianggarkan secara automatik."
+    )
+    ratios_changed_hint = (
+        "⚠️ You've changed your destination or horizon — the suggestions below are for your previous choice. Click above to refresh."
+        if lang == "en" else
+        "⚠️ Anda telah menukar destinasi atau tempoh — cadangan di bawah adalah untuk pilihan sebelumnya. Klik di atas untuk kemas kini."
+    )
 
-    with st.spinner(f"Comparing prices between {origin_state} and {destination_state}..."):
-        for div, origin_amount in active_spending.items():
-            ratio_data = fetch_price_ratio(origin_state, destination_state, div)
+    current_ratio_snapshot = (origin_state, destination_state, tuple(sorted(active_spending.items())))
 
-            if ratio_data:
-                ratio = ratio_data["ratio"]
-                pct_diff = ratio_data["pct_difference"]
-            else:
-                # Fallback if the ratio lookup fails for this category —
-                # assume no price difference rather than blocking the page
-                ratio = 1.0
-                pct_diff = 0.0
+    if "reloc_ratios_generated" not in st.session_state:
+        st.session_state.reloc_ratios_generated = False
+    if "reloc_ratios_last_inputs" not in st.session_state:
+        st.session_state.reloc_ratios_last_inputs = None
+    if "reloc_destination_spending" not in st.session_state:
+        st.session_state.reloc_destination_spending = None
+    if "reloc_ratio_info" not in st.session_state:
+        st.session_state.reloc_ratio_info = None
 
-            suggested_amount = round(origin_amount * ratio)
-            ratio_info[div] = {"ratio": ratio, "pct_diff": pct_diff}
+    ratios_changed = (
+        st.session_state.reloc_ratios_generated
+        and st.session_state.reloc_ratios_last_inputs is not None
+        and st.session_state.reloc_ratios_last_inputs != current_ratio_snapshot
+    )
 
-            destination_spending[div] = suggested_amount
+    if st.button(fetch_ratios_label, type="primary", use_container_width=True):
+        st.session_state.reloc_ratios_generated = True
+        st.session_state.reloc_ratios_last_inputs = current_ratio_snapshot
+        ratios_changed = False
 
+        destination_spending = {}
+        ratio_info = {}
+
+        with st.spinner(f"Comparing prices between {origin_state} and {destination_state}..."):
+            for div, origin_amount in active_spending.items():
+                ratio_data = fetch_price_ratio(origin_state, destination_state, div)
+
+                if ratio_data:
+                    ratio = ratio_data["ratio"]
+                    pct_diff = ratio_data["pct_difference"]
+                else:
+                    ratio = 1.0
+                    pct_diff = 0.0
+
+                suggested_amount = round(origin_amount * ratio)
+                ratio_info[div] = {"ratio": ratio, "pct_diff": pct_diff}
+                destination_spending[div] = suggested_amount
+
+        st.session_state.reloc_destination_spending = destination_spending
+        st.session_state.reloc_ratio_info = ratio_info
+
+    if not st.session_state.reloc_ratios_generated:
+        st.info(fetch_ratios_hint)
+        st.stop()
+
+    if ratios_changed:
+        st.warning(ratios_changed_hint)
+
+    destination_spending = st.session_state.reloc_destination_spending
+    ratio_info = st.session_state.reloc_ratio_info
+    
     # ── editable destination table ───────────────────────────────────────────
     st.markdown(f"**{editable_label}**")
 
@@ -1041,26 +1187,66 @@ def render_relocation_planner(
         st.warning(warning_zero)
         st.stop()
 
-    if not st.button(compare_button_text, type="primary"):
-        st.caption(compare_hint) 
+    changed_hint_reloc = (
+        "⚠️ You've changed your inputs — the comparison below is based on your previous numbers. Click Compare again to refresh it."
+        if lang == "en" else
+        "⚠️ Anda telah menukar input — perbandingan di bawah adalah berdasarkan angka sebelumnya. Klik Bandingkan semula untuk mengemas kininya."
+    )
+
+    current_reloc_snapshot = (
+        origin_state, destination_state, horizon_months,
+        tuple(sorted(active_spending.items())),
+        tuple(sorted(edited_spending.items())),
+    )
+
+    if "reloc_generated" not in st.session_state:
+        st.session_state.reloc_generated = False
+    if "reloc_last_inputs" not in st.session_state:
+        st.session_state.reloc_last_inputs = None
+    if "reloc_origin_results" not in st.session_state:
+        st.session_state.reloc_origin_results = None
+    if "reloc_dest_results" not in st.session_state:
+        st.session_state.reloc_dest_results = None
+
+    reloc_inputs_changed = (
+        st.session_state.reloc_generated
+        and st.session_state.reloc_last_inputs is not None
+        and st.session_state.reloc_last_inputs != current_reloc_snapshot
+    )
+
+    if st.button(compare_button_text, type="primary"):
+        st.session_state.reloc_generated = True
+        st.session_state.reloc_last_inputs = current_reloc_snapshot
+        reloc_inputs_changed = False
+
+        origin_results = {}
+        dest_results = {}
+
+        with st.spinner(spinner_text.format(n=horizon_months)):
+            for div, amount in active_spending.items():
+                origin_forecast = fetch_forecast(origin_state, div, horizon_months)
+                if origin_forecast:
+                    origin_results[div] = origin_forecast
+
+            for div, amount in edited_spending.items():
+                if amount <= 0:
+                    continue
+                dest_forecast = fetch_forecast(destination_state, div, horizon_months)
+                if dest_forecast:
+                    dest_results[div] = dest_forecast
+
+        st.session_state.reloc_origin_results = origin_results
+        st.session_state.reloc_dest_results = dest_results
+
+    if not st.session_state.reloc_generated:
+        st.caption(compare_hint)
         st.stop()
 
-    # ── run /forecast for BOTH states, every active category ─────────────────
-    origin_results = {}
-    dest_results = {}
+    if reloc_inputs_changed:
+        st.warning(changed_hint_reloc)
 
-    with st.spinner(spinner_text.format(n=horizon_months)):
-        for div, amount in active_spending.items():
-            origin_forecast = fetch_forecast(origin_state, div, horizon_months)
-            if origin_forecast:
-                origin_results[div] = origin_forecast
-
-        for div, amount in edited_spending.items():
-            if amount <= 0:
-                continue
-            dest_forecast = fetch_forecast(destination_state, div, horizon_months)
-            if dest_forecast:
-                dest_results[div] = dest_forecast
+    origin_results = st.session_state.reloc_origin_results
+    dest_results = st.session_state.reloc_dest_results
 
     if not origin_results or not dest_results:
         st.error(error_text)
