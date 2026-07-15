@@ -461,6 +461,94 @@ async def price_ratio(
         "pct_difference": round((ratio - 1) * 100, 2),
     }
 
+@app.get("/trends")
+@limiter.limit("30/minute")
+async def trends(
+    request: Request,
+    state: str,
+    division: str,
+    months_back: int =60,
+):
+    """
+    Returns a raw historical CPI/PPI/OPR time series for charting - 
+    NOT a forecast, hust the real recorded data over time.
+    
+    Example:
+        GET /trends?state=Selangor&division=01&months_back=60
+    """
+    if state not in STATES:
+        raise HTTPException(status_code=400, detail=f"Unknown state: {state}")
+    
+    if division not in CATEGORIES:
+        raise HTTPException(status_code=400, detatil=f"Unknown division code: {division}")
+    
+    if months_back not in (24, 36, 60, 120):
+        raise HTTPException(
+            status_code=400,
+            detail="months_back must be 24,36, 60, or 120"
+        )
+    
+    history = get_feature_history(state, division, months_back=months_back)
+
+    if not history:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No historical data found for {state}/{division}"
+        )
+    
+    return {
+        "state": state,
+        "division": division,
+        "category_name": CATEGORIES.get(division, division),
+        "months_back": months_back,
+        "series": [
+            {
+                "date": str(row["date"]),
+                "cpi_index": row["cpi_index"],
+                "cpi_ma_3": row["cpi_ma_3"],
+                "ppi_index": row["ppi_index"],
+                "opr_rate": row["opr_rate"],
+            }
+            for row in history
+        ],
+    }
+
+@app.get("/income-snapshot")
+@limiter.limit("30/minute")
+async def income_snapshot(request: Request, state: str):
+    """
+    Returns the HIES 2022 income/expenditure snapshot for one state.
+    This is a static survey snapshot, not a monthly time series.
+    """
+    if state not in STATES:
+        raise HTTPException(status_code=400, detail=f"Unknown sate: {state}")
+    
+    global bq_client
+    if bq_client is None:
+        bq_client = bigquery.Client(project=PROJECT_ID)
+
+    query = f"""
+        select
+            income_median, income_mean, expenditure_mean,
+            gini, poverty_rate, income_band
+        from `{PROJECT_ID}.dbt_.mart_income_bands`
+        where state = @state
+        limit 1
+    """
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("state", "STRING", state),
+        ]
+    )
+
+    rows = list(bq_client.query(query, job_config=job_config).result())
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No income data found for {state}")
+    
+    return dict(rows[0])
+
 @app.get("/headline-inflation")
 @limiter.limit("30/minute")
 async def headline_inflation(request: Request):

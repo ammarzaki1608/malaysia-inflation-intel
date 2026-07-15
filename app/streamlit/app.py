@@ -72,6 +72,16 @@ LANG = {
         "suggested_spending_header": "Suggested spending in your new state",
         "compare_button": "🔍 Compare full forecast",
         "salary_needed_label": "Recommended minimum salary",
+        "mode_explorer": "📈 Data Explorer",
+        "explorer_title": "📈 Data Explorer",
+        "explorer_caption": "See the real historical trends behind your forecast — CPI, producer prices, and interest rates, straight from DOSM and BNM.",
+        "explorer_state_label": "State",
+        "explorer_category_label": "Category",
+        "explorer_range_label": "Time range",
+        "cpi_trend_header": "CPI Trend",
+        "ppi_overlay_header": "Producer Prices vs Consumer Prices",
+        "opr_overlay_header": "Interest Rate vs Inflation",
+        "income_header": "Income & Expenditure Snapshot (HIES 2022)"
     },
     "ms": {
         "app_title": "Maklumat Inflasi Peribadi Malaysia",
@@ -103,7 +113,17 @@ LANG = {
         "moving_to_label": "Berpindah ke",
         "suggested_spending_header": "Cadangan perbelanjaan di negeri baharu anda",
         "compare_button": "🔍 Bandingkan unjuran penuh",
-        "salary_needed_label": "Gaji minimum yang disyorkan"
+        "salary_needed_label": "Gaji minimum yang disyorkan",
+        "mode_explorer": "📈 Peneroka Data",
+        "explorer_title": "📈 Peneroka Data",
+        "explorer_caption": "Lihat trend sejarah sebenar di sebalik unjuran anda — CPI, harga pengeluar, dan kadar faedah, terus daripada DOSM dan BNM.",
+        "explorer_state_label": "Negeri",
+        "explorer_category_label": "Kategori",
+        "explorer_range_label": "Julat masa",
+        "cpi_trend_header": "Trend CPI",
+        "ppi_overlay_header": "Harga Pengeluar lwn Harga Pengguna",
+        "opr_overlay_header": "Kadar Faedah lwn Inflasi",
+        "income_header": "Ringkasan Pendapatan & Perbelanjaan (HIES 2022)"
     }
 }
 
@@ -240,6 +260,36 @@ def fetch_headline_inflation() -> dict:
         print(f"[WARNING] fetch_headline_inflation failed: {e}")
         return None
 
+@st.cache_data(ttl=3600)
+def fetch_trends(state: str, division: str, months_back: int = 60) -> dict:
+    """Get raw historical CPI/PPR/OPR time series for charting."""
+    try:
+        response = httpx.get(
+            f"{API_URL}/trends",
+            params={"state": state, "division": division, "months_back": months_back},
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[WARNING] fetch_trends failed: {e}")
+        return None
+    
+@st.cache_data(ttl=3600)
+def fetch_income_snapshot(state: str) -> dict:
+    """Get the HIES 2022 income/expenditure snapshot for one state."""
+    try:
+        response = httpx.get(
+            f"{API_URL}/income-snapshot",
+            params={"state": state},
+            timeout=15.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        print(f"[WARNING] fetch_income_snapshot failed: {e}")
+        return None
+
 def render_forecast_chart(forecast_data: list, category_name: str, base_amount_rm: float = None) -> go.Figure:
     """
     Render a multi-month forecast with a widening confidence band.
@@ -326,7 +376,7 @@ def render_sidebar() -> tuple:
     # Mode selector
     mode = st.sidebar.radio(
         t["mode_label"],
-        options=[t["mode_home"], t["mode_calculator"], t["mode_relocation"]],
+        options=[t["mode_home"], t["mode_explorer"], t["mode_calculator"], t["mode_relocation"]],
         key="mode_select",
     )
     st.sidebar.divider()
@@ -1149,7 +1199,7 @@ def render_relocation_planner(
 
     destination_spending = st.session_state.reloc_destination_spending
     ratio_info = st.session_state.reloc_ratio_info
-    
+
     # ── editable destination table ───────────────────────────────────────────
     st.markdown(f"**{editable_label}**")
 
@@ -1412,16 +1462,205 @@ def render_relocation_planner(
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
     st.caption(disclaimer_text)
 
-# ── main entry point ──────────────────────────────────────────────────────────
+def render_data_explorer(t, lang):
+    st.title(t["explorer_title"])
+    st.caption(t["explorer_caption"])
 
+    category_labels = CATEGORIES if lang == "en" else CATEGORY_NAMES_MS
+
+    col_state, col_cat, col_range = st.columns(3)
+    with col_state:
+        explorer_state = st.selectbox(t["explorer_state_label"], options=STATES, key="explorer_state")
+    with col_cat:
+        explorer_division = st.selectbox(
+            t["explorer_category_label"],
+            options=list(category_labels.keys()),
+            format_func=lambda k: category_labels.get(k, k),
+            key="explorer_division",
+        )
+    with col_range:
+        months_back = st.selectbox(
+            t["explorer_range_label"],
+            options=[24, 36, 60, 120],
+            format_func=lambda x: f"{x} months" if lang == "en" else f"{x} bulan",
+            index=2,
+            key="explorer_months",
+        )
+
+    with st.spinner("Loading historical data..." if lang == "en" else "Memuatkan data sejarah..."):
+        trends = fetch_trends(explorer_state, explorer_division, months_back)
+
+    if trends is None:
+        st.error("Could not load historical data." if lang == "en" else "Data sejarah tidak dapat dimuatkan.")
+        st.stop()
+
+    series = trends["series"]
+    dates = [row["date"] for row in series]
+
+    st.divider()
+
+    # ── CPI trend with 3-month moving average overlay ──────────────────────
+    st.subheader(t["cpi_trend_header"])
+    st.caption(
+        "The 3-month average is the strongest signal our model uses to forecast your spending."
+        if lang == "en" else
+        "Purata 3 bulan adalah isyarat paling kuat yang digunakan model kami untuk meramal perbelanjaan anda."
+    )
+
+    fig_cpi = go.Figure()
+    fig_cpi.add_trace(go.Scatter(
+        x=dates, y=[row["cpi_index"] for row in series],
+        mode="lines", name="CPI Index", line=dict(color="#64748b", width=1.5),
+    ))
+    fig_cpi.add_trace(go.Scatter(
+        x=dates, y=[row["cpi_ma_3"] for row in series],
+        mode="lines", name="3-month average", line=dict(color="#1F4E79", width=3),
+    ))
+
+     # ── known economic events, marked only if they fall within the visible date range ──
+    known_events = [
+        {
+            "date": "2024-03-01",
+            "label_en": "SST raised 6%→8%",
+            "label_ms": "SST naik 6%→8%",
+        },
+        {
+            "date": "2024-06-01",
+            "label_en": "Diesel subsidy cut",
+            "label_ms": "Subsidi diesel dikurangkan",
+        },
+    ]
+
+    chart_dates = set(dates)
+    date_to_cpi = {row["date"]: row["cpi_index"] for row in series}
+
+    event_x, event_y, event_hover = [], [], []
+    for event in known_events:
+        if event["date"] in chart_dates:
+            fig_cpi.add_vline(
+                x=event["date"],
+                line_width=1.5,
+                line_dash="dash",
+                line_color="#D4890A",
+            )
+            event_x.append(event["date"])
+            event_y.append(date_to_cpi[event["date"]])
+            label = event["label_en"] if lang == "en" else event["label_ms"]
+            event_hover.append(f"{event['date']}<br>{label}")
+
+    if event_x:
+        fig_cpi.add_trace(go.Scatter(
+            x=event_x, y=event_y,
+            mode="markers",
+            marker=dict(size=10, color="#D4890A", symbol="diamond"),
+            name="Policy events" if lang == "en" else "Peristiwa dasar",
+            hovertext=event_hover,
+            hoverinfo="text",
+        ))
+
+    fig_cpi.update_layout(
+        height=380, margin=dict(t=20, b=40, l=50, r=20),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+
+    fig_cpi.update_layout(
+        height=380, margin=dict(t=20, b=40, l=50, r=20),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig_cpi, use_container_width=True)
+    st.caption(
+        "Dashed markers: verified policy events (SST rate increase, 1 March 2024; targeted diesel subsidy, 10 June 2024 — Ministry of Finance Malaysia)."
+        if lang == "en" else
+        "Penanda putus-putus: peristiwa dasar yang disahkan (kenaikan kadar SST, 1 Mac 2024; subsidi diesel bersasar, 10 Jun 2024 — Kementerian Kewangan Malaysia)."
+    )
+
+    st.divider()
+
+    # ── PPI vs CPI ───────────────────────────────────────────────────────────
+    st.subheader(t["ppi_overlay_header"])
+    st.caption(
+        "Producer prices often move before consumer prices — a leading signal our model captures as ppi_lag features."
+        if lang == "en" else
+        "Harga pengeluar sering bergerak dahulu berbanding harga pengguna — isyarat awal yang ditangkap model kami sebagai ciri ppi_lag."
+    )
+
+    fig_ppi = go.Figure()
+    fig_ppi.add_trace(go.Scatter(
+        x=dates, y=[row["cpi_index"] for row in series],
+        mode="lines", name="CPI (consumer)", line=dict(color="#1F4E79", width=2.5),
+    ))
+    fig_ppi.add_trace(go.Scatter(
+        x=dates, y=[row["ppi_index"] for row in series],
+        mode="lines", name="PPI (producer)", line=dict(color="#dc2626", width=2, dash="dot"),
+    ))
+    fig_ppi.update_layout(
+        height=380, margin=dict(t=20, b=40, l=50, r=20),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig_ppi, use_container_width=True)
+
+    st.divider()
+
+    # ── OPR vs CPI (dual y-axis) ────────────────────────────────────────────
+    st.subheader(t["opr_overlay_header"])
+    st.caption(
+        "BNM's interest rate decisions (OPR) are one of the signals our model uses, shown here against inflation trend."
+        if lang == "en" else
+        "Keputusan kadar faedah BNM (OPR) adalah salah satu isyarat yang digunakan model kami, ditunjukkan di sini berbanding trend inflasi."
+    )
+
+    fig_opr = go.Figure()
+    fig_opr.add_trace(go.Scatter(
+        x=dates, y=[row["cpi_ma_3"] for row in series],
+        mode="lines", name="CPI trend", line=dict(color="#1F4E79", width=2.5), yaxis="y1",
+    ))
+    fig_opr.add_trace(go.Scatter(
+        x=dates, y=[row["opr_rate"] for row in series],
+        mode="lines", name="OPR (%)", line=dict(color="#16a34a", width=2), yaxis="y2",
+    ))
+    fig_opr.update_layout(
+        height=380, margin=dict(t=20, b=40, l=50, r=50),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(title="CPI Index"),
+        yaxis2=dict(title="OPR (%)", overlaying="y", side="right"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig_opr, use_container_width=True)
+
+    st.divider()
+
+    # ── HIES income snapshot ────────────────────────────────────────────────
+    st.subheader(t["income_header"])
+    income = fetch_income_snapshot(explorer_state)
+    if income:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Median monthly income" if lang == "en" else "Pendapatan median bulanan", f"RM{income.get('income_median', 0):,.0f}")
+        with col2:
+            st.metric("Mean monthly expenditure" if lang == "en" else "Purata perbelanjaan bulanan", f"RM{income.get('expenditure_mean', 0):,.0f}")
+        with col3:
+            st.metric("Gini coefficient" if lang == "en" else "Pekali Gini", f"{income.get('gini', 0):.3f}")
+        st.caption(
+            "Source: DOSM Household Income & Expenditure Survey (HIES) 2022 — a static snapshot, not a monthly time series."
+            if lang == "en" else
+            "Sumber: Penyiasatan Pendapatan & Perbelanjaan Isi Rumah (HIES) DOSM 2022 — gambaran statik, bukan siri masa bulanan."
+        )
+    else:
+        st.info("No income data available for this state." if lang == "en" else "Tiada data pendapatan untuk negeri ini.")
+
+# ── main entry point ──────────────────────────────────────────────────────────
 def main():
     state, spending, monthly_salary, horizon_months, mode, t, lang = render_sidebar()
 
     if mode.startswith("🏠"):
         render_home(t, lang)
+    elif mode.startswith("📈"):
+        render_data_explorer(t, lang)
     elif mode.startswith("📊"):
         render_personal_calculator(state, spending, monthly_salary, horizon_months, t, lang)
     else:
