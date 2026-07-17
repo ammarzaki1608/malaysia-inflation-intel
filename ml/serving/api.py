@@ -26,6 +26,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from fastapi import Request
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "rag"))
+from retriever import load_index_from_gcs, retrieve
+from google import genai
 
 logging.basicConfig(
     level=logging.INFO,
@@ -153,8 +157,9 @@ def get_latest_features(state: str, division: str) -> dict:
 
 @app.on_event("startup")
 async def startup_event():
-    """Load model when API starts up."""
+    """Load model and RAG index when API starts up."""
     load_model_from_gcs()
+    load_index_from_gcs()
 
 
 # ── Core prediction logic ─────────────────────────────────────────────────────
@@ -592,6 +597,93 @@ async def headline_inflation(request: Request):
         "headline_inflation_pct": yoy_change_pct,
         "latest_date": str(latest["date"]),
         "compared_to_date": str(year_ago["date"]),
+    }
+
+class AskRequest(BaseModel):
+    question: str
+    state: str
+    division: str
+    horizon_months: int = 6
+
+
+GENERATION_MODEL = "gemini-3.1-flash-lite"
+
+_ask_genai_client = None
+
+
+@app.post("/ask")
+@limiter.limit("15/minute")
+async def ask(request: Request, body: AskRequest):
+    """
+    Answers a user's question about their inflation forecast,
+    grounded in retrieved domain knowledge and their actual live
+    forecast numbers. The LLM never invents figures — it only
+    explains numbers this API already computed.
+    """
+    global _ask_genai_client
+    if _ask_genai_client is None:
+        _ask_genai_client = genai.Client()
+
+    if body.state not in STATES:
+        raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
+    if body.division not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
+
+    # Step 1 — retrieve relevant domain knowledge
+    retrieved = retrieve(body.question, top_k=3)
+    knowledge_context = "\n\n".join([f"- {r['text']}" for r in retrieved])
+
+    # Step 2 — get the user's actual live forecast (never invented)
+    forecast_result = recursive_forecast(body.state, body.division, body.horizon_months)
+    category_name = CATEGORIES.get(body.division, body.division)
+    forecast_summary = (
+        f"Category: {category_name} in {body.state}\n"
+        f"Forecast horizon: {body.horizon_months} months\n"
+        f"Latest real data date: {forecast_result['latest_real_date']}\n"
+        f"Month-by-month forecast: {forecast_result['forecasts']}"
+    )
+
+    # Step 3 — build a grounded prompt
+    system_instruction = (
+        "You are a helpful assistant explaining Malaysian inflation forecasts to everyday users. "
+        "You must ONLY use the domain knowledge and forecast data provided below — never invent "
+        "numbers, dates, or facts not present in this context. If the question cannot be answered "
+        "from the provided context, say so honestly rather than guessing. Keep answers concise, "
+        "in plain language, and directly relevant to the user's question."
+    )
+
+    prompt = f"""DOMAIN KNOWLEDGE:
+{knowledge_context}
+
+LIVE FORECAST DATA:
+{forecast_summary}
+
+USER QUESTION:
+{body.question}
+
+Answer the user's question using only the domain knowledge and forecast data above."""
+
+    # Step 4 — generate the grounded answer
+    response = _ask_genai_client.models.generate_content(
+        model=GENERATION_MODEL,
+        contents=prompt,
+        config={
+            "system_instruction": system_instruction,
+            "max_output_tokens": 300,
+            "temperature": 0.3,
+        },
+    )
+
+    return {
+        "question": body.question,
+        "answer": response.text,
+        "retrieved_context": [r["id"] for r in retrieved],
+        "based_on_forecast": {
+            "state": body.state,
+            "division": body.division,
+            "category_name": category_name,
+            "horizon_months": body.horizon_months,
+        },
     }
 
 # ── entry point ───────────────────────────────────────────────────────────────
