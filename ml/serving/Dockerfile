@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY api.py .
+COPY rag/ ./rag/
 
 # Cloud Run expects port 8080
 EXPOSE 8080

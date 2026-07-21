@@ -554,6 +554,83 @@ async def income_snapshot(request: Request, state: str):
     
     return dict(rows[0])
 
+@app.get("/category-leaderboard")
+@limiter.limit("30/minute")
+async def category_leaderboard(request: Request):
+    """
+    Returns year-on-year % change for every CPI category, nationally,
+    ranked fastest-rising first. Used for Data Explorer's overview section.
+    """
+    global bq_client
+    if bq_client is None:
+        bq_client = bigquery.Client(project=PROJECT_ID)
+
+    query = f"""
+        select division, date, index
+        from `{PROJECT_ID}.raw.cpi_national`
+        where division != 'overall'
+        order by division, date desc
+    """
+
+    rows = list(bq_client.query(query).result())
+
+    # Group by division, keep the latest and ~12-months-ago value for each
+    by_division = {}
+    for row in rows:
+        by_division.setdefault(row["division"], []).append(row)
+
+    results = []
+    for division, entries in by_division.items():
+        if len(entries) < 13:
+            continue
+        latest = entries[0]
+        year_ago = entries[12]
+        pct_change = round((latest["index"] - year_ago["index"]) / year_ago["index"] * 100, 2)
+        results.append({
+            "division": division,
+            "category_name": CATEGORIES.get(division, division),
+            "yoy_change_pct": pct_change,
+        })
+
+    results.sort(key=lambda x: x["yoy_change_pct"], reverse=True)
+
+    return {"categories": results}
+
+@app.get("/state-leaderboard")
+@limiter.limit("30/minute")
+async def state_leaderboard(request: Request, division: str):
+    """
+    Returns the current CPI index for every state, for one category,
+    ranked highest first. Used to show relative cost differences
+    across states in Data Explorer.
+    """
+    if division not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown division code: {division}")
+
+    global bq_client
+    if bq_client is None:
+        bq_client = bigquery.Client(project=PROJECT_ID)
+
+    query = f"""
+        select state, cpi_index
+        from `{PROJECT_ID}.dbt_.mart_cpi_features`
+        where division = @division
+          and cpi_index is not null
+        qualify row_number() over (partition by state order by date desc) = 1
+    """
+
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("division", "STRING", division),
+        ]
+    )
+
+    rows = list(bq_client.query(query, job_config=job_config).result())
+    results = [{"state": r["state"], "cpi_index": r["cpi_index"]} for r in rows]
+    results.sort(key=lambda x: x["cpi_index"], reverse=True)
+
+    return {"division": division, "category_name": CATEGORIES.get(division, division), "states": results}
+
 @app.get("/headline-inflation")
 @limiter.limit("30/minute")
 async def headline_inflation(request: Request):
@@ -601,55 +678,76 @@ async def headline_inflation(request: Request):
 
 class AskRequest(BaseModel):
     question: str
-    state: str
-    division: str
+    state: str | None = None
+    division: str | None = None
     horizon_months: int = 6
 
 
 GENERATION_MODEL = "gemini-3.1-flash-lite"
-
 _ask_genai_client = None
+
+# Keywords suggesting the question is about the user's OWN specific
+# numbers, not a general "how does this app work" question. This is a
+# lightweight heuristic — not perfect, but free and fast, avoiding an
+# extra LLM call just to classify intent.
+PERSONAL_QUESTION_SIGNALS = [
+    "my forecast", "my spending", "my category", "my leak", "my surplus",
+    "my number", "why is my", "why does my", "this category", "this forecast",
+    "unjuran saya", "perbelanjaan saya", "kategori saya", "bocor saya",
+]
+
+
+def _needs_live_forecast(question: str) -> bool:
+    q = question.lower()
+    return any(signal in q for signal in PERSONAL_QUESTION_SIGNALS)
 
 
 @app.post("/ask")
 @limiter.limit("15/minute")
 async def ask(request: Request, body: AskRequest):
     """
-    Answers a user's question about their inflation forecast,
-    grounded in retrieved domain knowledge and their actual live
-    forecast numbers. The LLM never invents figures — it only
-    explains numbers this API already computed.
+    Answers a question about the app in general, OR about the user's
+    specific forecast — grounded in retrieved domain knowledge, and in
+    live forecast data only when the question actually needs it.
     """
     global _ask_genai_client
     if _ask_genai_client is None:
         _ask_genai_client = genai.Client()
 
-    if body.state not in STATES:
-        raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
-    if body.division not in CATEGORIES:
-        raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
-
-    # Step 1 — retrieve relevant domain knowledge
+    # Step 1 — retrieve relevant domain knowledge (always happens)
     retrieved = retrieve(body.question, top_k=3)
     knowledge_context = "\n\n".join([f"- {r['text']}" for r in retrieved])
 
-    # Step 2 — get the user's actual live forecast (never invented)
-    forecast_result = recursive_forecast(body.state, body.division, body.horizon_months)
-    category_name = CATEGORIES.get(body.division, body.division)
-    forecast_summary = (
-        f"Category: {category_name} in {body.state}\n"
-        f"Forecast horizon: {body.horizon_months} months\n"
-        f"Latest real data date: {forecast_result['latest_real_date']}\n"
-        f"Month-by-month forecast: {forecast_result['forecasts']}"
-    )
+    # Step 2 — only fetch live forecast data if the question actually
+    # seems to be about the user's own numbers, and state/division
+    # were actually provided
+    forecast_summary = "Not applicable — this question does not require the user's live forecast data."
+    used_live_data = False
+
+    if body.state and body.division and _needs_live_forecast(body.question):
+        if body.state not in STATES:
+            raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
+        if body.division not in CATEGORIES:
+            raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
+
+        forecast_result = recursive_forecast(body.state, body.division, body.horizon_months)
+        category_name = CATEGORIES.get(body.division, body.division)
+        forecast_summary = (
+            f"Category: {category_name} in {body.state}\n"
+            f"Forecast horizon: {body.horizon_months} months\n"
+            f"Latest real data date: {forecast_result['latest_real_date']}\n"
+            f"Month-by-month forecast: {forecast_result['forecasts']}"
+        )
+        used_live_data = True
 
     # Step 3 — build a grounded prompt
     system_instruction = (
-        "You are a helpful assistant explaining Malaysian inflation forecasts to everyday users. "
+        "You are a helpful assistant for a Malaysian personal inflation forecasting app. "
         "You must ONLY use the domain knowledge and forecast data provided below — never invent "
         "numbers, dates, or facts not present in this context. If the question cannot be answered "
         "from the provided context, say so honestly rather than guessing. Keep answers concise, "
-        "in plain language, and directly relevant to the user's question."
+        "in plain language. If the question is a general question about how the app works, answer "
+        "from the domain knowledge alone without needing specific numbers."
     )
 
     prompt = f"""DOMAIN KNOWLEDGE:
@@ -678,13 +776,71 @@ Answer the user's question using only the domain knowledge and forecast data abo
         "question": body.question,
         "answer": response.text,
         "retrieved_context": [r["id"] for r in retrieved],
-        "based_on_forecast": {
-            "state": body.state,
-            "division": body.division,
-            "category_name": category_name,
-            "horizon_months": body.horizon_months,
-        },
+        "used_live_forecast_data": used_live_data,
     }
+
+class PrescriptiveRequest(BaseModel):
+    context_type: str  # "personal_calculator" or "relocation_planner"
+    summary_data: dict
+
+
+@app.post("/prescriptive-insight")
+@limiter.limit("15/minute")
+async def prescriptive_insight(request: Request, body: PrescriptiveRequest):
+    """
+    Generates a short, action-oriented suggestion grounded in the
+    user's own report numbers. Deliberately stays in general-budgeting
+    territory — never recommends specific financial products, insurers,
+    or investments, since this app is not a licensed financial advisor.
+    """
+    global _ask_genai_client
+    if _ask_genai_client is None:
+        _ask_genai_client = genai.Client()
+
+    system_instruction = (
+        "You are a budgeting assistant for a Malaysian personal inflation app. "
+        "Generate ONE short paragraph (2-3 sentences) offering a general, actionable "
+        "budgeting suggestion based on the data provided. "
+        "STRICT RULES: "
+        "1. Never recommend specific financial products, insurers, banks, or investments. "
+        "2. Never use directive language like 'you should switch to X' or 'invest in Y'. "
+        "3. Only suggest general actions like reviewing a specific expense category, "
+        "building a buffer, or planning ahead — never specific financial products. "
+        "4. Stay grounded only in the numbers provided — never invent figures. "
+        "5. Keep it concise and practical, not alarmist."
+    )
+
+    if body.context_type == "personal_calculator":
+        prompt = f"""REPORT DATA:
+Biggest leak category: {body.summary_data.get('biggest_leak_name')} (rising {body.summary_data.get('biggest_leak_pct')}%)
+Best category: {body.summary_data.get('biggest_saving_name')}
+Current monthly surplus: RM{body.summary_data.get('current_surplus')}
+Projected monthly surplus: RM{body.summary_data.get('projected_surplus')}
+Horizon: {body.summary_data.get('horizon_months')} months
+
+Generate a short, general budgeting suggestion based on this report."""
+    else:
+        prompt = f"""RELOCATION COMPARISON DATA:
+Origin state: {body.summary_data.get('origin_state')}
+Destination state: {body.summary_data.get('destination_state')}
+Monthly cost difference: RM{body.summary_data.get('cost_diff_rm')}
+Recommended minimum salary: RM{body.summary_data.get('salary_needed')}
+Horizon: {body.summary_data.get('horizon_months')} months
+
+Generate a short, general suggestion for someone considering this move."""
+
+    response = _ask_genai_client.models.generate_content(
+        model=GENERATION_MODEL,
+        contents=prompt,
+        config={
+            "system_instruction": system_instruction,
+            "max_output_tokens": 150,
+            "temperature": 0.4,
+        },
+    )
+
+    return {"insight": response.text}
+
 
 # ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":

@@ -28,6 +28,16 @@ resource "google_cloud_run_v2_service" "api" {
         value = "models/cpi_forecast_20260619_194024.joblib"
       }
 
+      env {
+        name = "GEMINI_API_KEY"
+        value_source {
+          secret_key_ref {
+            secret  = "gemini-api-key"
+            version = "latest"
+          }
+        }
+      }
+
       resources {
         limits = {
           cpu    = "2"
