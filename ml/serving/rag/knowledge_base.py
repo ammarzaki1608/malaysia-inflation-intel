@@ -118,4 +118,8 @@ KNOWLEDGE_BASE = [
         "id": "recursive_forecast_limitation",
         "text": "Because multi-month forecasts are generated recursively, longer-horizon forecasts (such as 12 months) are less reliable than shorter ones (such as 3 months), since later predictions are increasingly built on the model's own earlier predictions rather than confirmed real data. Users should treat longer-horizon forecasts as directional guidance rather than precise figures.",
     },
+    {
+    "id": "category_specific_causes_limitation",
+    "text": "This system can explain how forecast figures and labels like 'biggest leak' are calculated, and can point to the model's general drivers (such as the 3-month moving average or producer price trends). It does not currently have category-specific economic narratives explaining why one particular category (e.g. Transport or Insurance) is moving the way it is beyond these general model mechanics.",
+    },
 ]
