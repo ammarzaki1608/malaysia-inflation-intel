@@ -922,13 +922,13 @@ def render_personal_calculator(
     with col_btn:
         if st.button(generate_label, type="primary", use_container_width=True):
             st.session_state.calculator_generated = True
-        st.session_state.calculator_last_inputs = current_inputs_snapshot
-        # Force a fresh calculation on this exact click
-        with st.spinner(f"Forecasting {horizon_months} months ahead..." if lang == "en" else f"Meramal {horizon_months} bulan akan datang..."):
-            st.session_state.calculator_result = calculate_budget_forecast(
-                state, spending, monthly_salary, horizon_months, lang
-            )
-        inputs_changed = False  # freshly regenerated, so no longer stale
+            st.session_state.calculator_last_inputs = current_inputs_snapshot
+            # Force a fresh calculation on this exact click
+            with st.spinner(f"Forecasting {horizon_months} months ahead..." if lang == "en" else f"Meramal {horizon_months} bulan akan datang..."):
+                st.session_state.calculator_result = calculate_budget_forecast(
+                    state, spending, monthly_salary, horizon_months, lang
+                )
+            inputs_changed = False  # freshly regenerated, so no longer stale
 
     if not st.session_state.calculator_generated:
         st.info(generate_hint)
