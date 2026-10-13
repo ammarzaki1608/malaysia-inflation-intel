@@ -96,16 +96,33 @@ Grounded answer, with retrieved-context IDs returned for traceability
 
 ## Key Results
 
-| Metric | Prophet (baseline) | XGBoost (production) |
-|---|---|---|
-| MAE | 5.549 | **0.733** |
-| RMSE | 7.447 | **1.624** |
-| MAPE | 5.06% | **0.63%** |
-| Directional accuracy | 0.75% | **96.98%** |
+Forecasts are evaluated with a **rolling-origin backtest** (`ml/training/backtest.py`). For every month from Jan 2018 to Jul 2026, every model is retrained using only the data available at that date. It then forecasts 1–12 months ahead for all 16 states × 13 categories and is scored against what actually happened. A self-test corrupts all future data and confirms no model's forecast changes.
 
-Training data: 38,752 rows across 208 series (16 states × 13 CPI divisions), 2010–2026, walk-forward cross-validation with 5 splits.
+**Error relative to the naive forecast ("prices stay where they are")**: below 1.00 beats naive.
 
-Top SHAP features: `cpi_ma_3` (3-month CPI trend), `cpi_lag_1` (last month CPI), `ppi_lag_3` (producer prices 3 months prior).
+| Model | 1 month | 3 months | 6 months | 12 months |
+|---|---:|---:|---:|---:|
+| Naive (no change) | 1.00 | 1.00 | 1.00 | 1.00 |
+| Trend continues (12-month drift) | 1.17 | 1.17 | 1.18 | 1.18 |
+| ETS per series | 1.06 | 1.01 | 0.99 | 0.96 |
+| **XGBoost, direct growth model** | 1.04 | 0.97 | 0.95 | 0.99 |
+| **ETS + XGBoost average** | 1.03 | **0.97** | **0.94** | **0.94** |
+| XGBoost, original design (currently deployed) | 2.23 | 1.37 | 1.22 | 1.11 |
+
+Since 2022, the ETS + XGBoost average is 10–21% more accurate than naive (0.97 / 0.90 / 0.86 / 0.79). It also gets the direction of price change right 70–77% of the time. No model reliably beats naive one month ahead: about 40% of month-to-month category changes are exactly zero.
+
+**What changed and why.** The original model reported MAE 0.73 and 97% directional accuracy, but those numbers didn't reflect real forecasting:
+- **Leakage.** Its moving-average features included the month being predicted (fixed in the dbt mart).
+- **Wrong test.** It was only tested one step ahead, while the app forecasts recursively up to 12 months.
+- **Mixed-up direction metric.** Directional accuracy compared neighbouring rows from different series.
+
+Under an honest backtest it was about 2× worse than naive. The redesign:
+- predicts the **% change over each horizon**, with a separate model per horizon, instead of feeding predictions back in;
+- tells the model **which state and category** each series is;
+- adds **price stickiness**, **cross-state category trends** and **last year's same-period change** as features;
+- trains on **absolute error**, which is what it is scored on.
+
+Full tables by period and metric: `docs/backtest_report.md`.
 
 **RAG evaluation** (10-question test set): faithfulness 1.00, answer relevancy 0.95, context precision 1.00.
 
@@ -285,7 +302,8 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 - **RAGAS dependency conflict.** The standard RAG evaluation library `ragas` (both 0.4.3 and 0.3.9) hit an unpatched upstream bug — `ragas.llms.base` imports `ChatVertexAI` from a `langchain_community` path that was relocated upstream, confirmed via the library's own GitHub issues (#2741, #2745). The documented workaround (pinning `langchain-community==0.2.17`) then surfaced a separate, unrelated `numpy==1.26.4` binary incompatibility on Python 3.13/Windows. Rather than continue chasing a fragile dependency chain, `evaluation/scorer.py` implements the same LLM-as-judge approach directly on the Gemini API.
 - **Category-specific causal reasoning.** The `/ask` endpoint can explain *how* a metric like "biggest leak" is calculated, but doesn't yet have per-category economic narratives explaining *why* a specific category (e.g. Transport) is moving the way it is, beyond general model mechanics. Documented in `knowledge_base.py` as `category_specific_causes_limitation`.
 - **State-level granularity.** CPI and price data are reported at the state level, not district/city level — DOSM's district-level "Decent Living Expenditure Index" (released Dec 2025) is a logged future improvement, not yet integrated.
-- **Recursive forecasting.** Multi-month forecasts feed each prediction back in as input for the next month; accuracy naturally decreases with horizon length since later predictions increasingly rely on the model's own prior outputs rather than confirmed data. Confidence bands widen accordingly.
+- **Deployed model not yet migrated.** The API still serves the original recursive XGBoost. The direct growth model above exists in the backtest; moving it into `train.py`/`api.py` is the next step.
+- **Short-horizon forecasts are inherently weak.** Monthly CPI is sticky, and even the best model only modestly beats "no change" at 1–3 months. Forecasts should be presented with that uncertainty.
 
 ---
 

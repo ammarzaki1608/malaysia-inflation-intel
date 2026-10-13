@@ -31,6 +31,9 @@ Models compared
   ets              per-series AutoETS (statsforecast), if installed
   xgb_as_deployed  production XGBoost: leaky MA training + API recursion
   xgb_leak_fixed   same, but MA windows exclude the target month
+  xgb_direct_growth  redesigned model: predicts % change, one model per horizon,
+                   knows each series' state/division (see "Direct growth model")
+  ens_ets_direct   average of ets and xgb_direct_growth (on the origins where ets runs)
   xgb_leaky_onestep  diagnostic only (h=1): scores the as-deployed model the
                    way train.py did, with leaky features. The gap between this
                    row and xgb_as_deployed at h=1 is the size of the leak.
@@ -49,6 +52,7 @@ USAGE
 -----
   python backtest.py --source bigquery            # your dbt staging views
   python backtest.py --source dosm                # public DOSM parquet, no GCP needed
+  python backtest.py --source files --data-dir data   # the same files saved locally
   python backtest.py --source synthetic           # fake data, for testing the code
   python backtest.py --self-test                  # proves no future data leaks in
 
@@ -141,8 +145,11 @@ def load_dosm():
         r.raise_for_status()
         return pd.read_parquet(io.BytesIO(r.content))
 
-    raw_cpi, raw_ppi, raw_rates = (get(DOSM_URLS[k]) for k in ("cpi_state", "ppi", "rates"))
+    return _from_raw(*(get(DOSM_URLS[k]) for k in ("cpi_state", "ppi", "rates")))
 
+
+def _from_raw(raw_cpi, raw_ppi, raw_rates):
+    """Apply the dbt staging-layer filters to the raw DOSM/BNM tables."""
     # stg_cpi_state
     cpi = raw_cpi.dropna(subset=["date", "state", "division", "index"]).rename(
         columns={"index": "cpi_index"})[["date", "state", "division", "cpi_index"]]
@@ -154,6 +161,13 @@ def load_dosm():
     opr = rates[(rates["rate"] == "br") & (rates["bank"] == "commercial")].rename(
         columns={"value": "opr_rate"})[["date", "opr_rate"]]
     return _clean(cpi, ppi, opr)
+
+
+def load_files(data_dir: str):
+    """Same as load_dosm, but from parquet files already saved in data_dir."""
+    read = lambda n: pd.read_parquet(os.path.join(data_dir, n))
+    return _from_raw(read("cpi_2d_state.parquet"), read("ppi.parquet"),
+                     read("interest_rates.parquet"))
 
 
 def _clean(cpi, ppi, opr):
@@ -350,13 +364,144 @@ def train_xgb(train_df: pd.DataFrame):
     return m
 
 
+# ── Direct growth model (redesign) ───────────────────────────────────────────
+#
+# What changed versus production, and why:
+#   target      log(y[t+h] / y[t]), the % change over the horizon, not the index
+#               level. Comparable across all series and over time, so a tree can
+#               learn it; levels keep hitting new highs the trees have never seen.
+#   direct      one model per horizon h, trained to jump straight from t to t+h.
+#               No feeding predictions back in, so errors don't compound and
+#               PPI/OPR never need to be "held constant".
+#   identity    state and division as categorical features. The old model could
+#               not tell flat Clothing from rising Food and gave both the same drift.
+#   stickiness  share of the last 12 months with zero change (~40% of real monthly
+#               changes are exactly zero; some series barely move).
+#   cross-state the same division's average growth across all states at t.
+#   seasonal    last year's change over the same calendar window.
+#   objective   absolute error: matches the MAE we are scored on and is robust to
+#               one-off shocks (SST changes, subsidy rationalisation, COVID).
+# Every feature uses data at or before the origin t only; the self-test checks it.
+
+DIRECT_FEATURES = [
+    "r1", "r3", "r6", "r12", "r24", "r60_pm", "zero_share_12",
+    "div_r1", "div_r3", "div_r12", "seas_h",
+    "month_sin", "month_cos",
+    "ppi_g1", "ppi_g3", "ppi_g12", "opr", "opr_d12",
+    "state", "division",
+]
+DIRECT_PARAMS = {
+    "objective": "reg:absoluteerror", "n_estimators": 400, "max_depth": 5,
+    "learning_rate": 0.04, "subsample": 0.8, "colsample_bytree": 0.8,
+    "min_child_weight": 20, "reg_lambda": 1.0, "tree_method": "hist",
+    "enable_categorical": True, "max_cat_to_onehot": 1,
+    "random_state": 42, "n_jobs": -1,
+}
+
+
+def build_direct_features(Yv: np.ndarray, series: pd.MultiIndex,
+                          dates: pd.DatetimeIndex, exog_cal: pd.DataFrame) -> dict:
+    """
+    Returns per-origin feature blocks as 2-D arrays of shape (n_dates, n_series),
+    plus the h-independent pieces needed to assemble training rows quickly.
+    Every value at row t is computed from rows <= t only.
+    """
+    L = np.log(Yv)
+    D, S = L.shape
+
+    def back(k):                      # L[t] - L[t-k], NaN where t < k
+        out = np.full_like(L, np.nan)
+        out[k:] = L[k:] - L[:-k]
+        return out
+
+    f = {"r1": back(1), "r3": back(3), "r6": back(6), "r12": back(12), "r24": back(24)}
+    f["r60_pm"] = back(60) / 60
+    chg0 = np.where(np.isnan(f["r1"]), np.nan, (np.abs(f["r1"]) < 1e-12).astype(float))
+    f["zero_share_12"] = pd.DataFrame(chg0).rolling(12, min_periods=6).mean().values
+
+    divs = np.array([d for _, d in series])
+    for k in ("r1", "r3", "r12"):
+        block = pd.DataFrame(f[k], columns=divs)
+        f[f"div_{k}"] = block.T.groupby(level=0).transform("mean").T.values
+
+    m = dates.month.values
+    f["month_sin"] = np.repeat(np.sin(2 * np.pi * m / 12)[:, None], S, axis=1)
+    f["month_cos"] = np.repeat(np.cos(2 * np.pi * m / 12)[:, None], S, axis=1)
+
+    lp = np.log(exog_cal["ppi_index"].values)
+    opr = exog_cal["opr_rate"].ffill().values          # ffill only looks backwards
+    for name, k in (("ppi_g1", 1), ("ppi_g3", 3), ("ppi_g12", 12)):
+        g = np.full(D, np.nan)
+        g[k:] = lp[k:] - lp[:-k]
+        f[name] = np.repeat(g[:, None], S, axis=1)
+    d12 = np.full(D, np.nan)
+    d12[12:] = opr[12:] - opr[:-12]
+    f["opr"] = np.repeat(opr[:, None], S, axis=1)
+    f["opr_d12"] = np.repeat(d12[:, None], S, axis=1)
+
+    f["_L"] = L
+    f["_states"] = pd.Categorical([s for s, _ in series])
+    f["_divs"] = pd.Categorical(divs)
+    return f
+
+
+def _direct_rows(f: dict, h: int, t_idx: np.ndarray, s_idx: np.ndarray) -> pd.DataFrame:
+    """Assemble a feature frame for (origin t, series s) pairs at horizon h."""
+    L = f["_L"]
+    cols = {}
+    for name in DIRECT_FEATURES:
+        if name in ("state", "division", "seas_h"):
+            continue
+        cols[name] = f[name][t_idx, s_idx]
+    # last year's change over the same window: L[t+h-12] - L[t-12]  (both <= t for h <= 12)
+    a, b = t_idx + h - 12, t_idx - 12
+    ok = b >= 0
+    seas = np.full(len(t_idx), np.nan)
+    seas[ok] = L[a[ok], s_idx[ok]] - L[b[ok], s_idx[ok]]
+    cols["seas_h"] = seas
+    cols["state"] = f["_states"][s_idx]
+    cols["division"] = f["_divs"][s_idx]
+    return pd.DataFrame(cols)[DIRECT_FEATURES]
+
+
+def train_direct(f: dict, h: int, T_idx: int):
+    """Train the horizon-h model using only targets observed by origin T (t + h <= T)."""
+    import xgboost as xgb
+    L = f["_L"]
+    D, S = L.shape
+    t_max = T_idx - h
+    if t_max < 24:
+        return None
+    tt, ss = np.meshgrid(np.arange(12, t_max + 1), np.arange(S), indexing="ij")
+    tt, ss = tt.ravel(), ss.ravel()
+    y = L[tt + h, ss] - L[tt, ss]
+    keep = ~np.isnan(y) & ~np.isnan(f["r1"][tt, ss])
+    X = _direct_rows(f, h, tt[keep], ss[keep])
+    m = xgb.XGBRegressor(**DIRECT_PARAMS)
+    m.fit(X, y[keep], verbose=False)
+    return m
+
+
+def fc_direct(models: dict, f: dict, T_idx: int, Yhist: np.ndarray) -> np.ndarray:
+    S = Yhist.shape[1]
+    out = np.full((S, MAX_H), np.nan)
+    s_idx = np.arange(S)
+    t_idx = np.full(S, T_idx)
+    for h, m in models.items():
+        if m is None:
+            continue
+        g = m.predict(_direct_rows(f, h, t_idx, s_idx))
+        out[:, h - 1] = Yhist[-1] * np.exp(g)
+    return out
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 4. BACKTEST LOOP
 # ═════════════════════════════════════════════════════════════════════════════
 
 def run_backtest(cpi, ppi, opr, start="2018-01-01", retrain_every=12,
                  use_ets=True, ets_window=120, ets_every=3, origin_step=1,
-                 origins=None, models=None):
+                 origins=None, models=None, direct_horizons=(1, 3, 6, 12)):
     t0 = time.time()
     exog = build_exog(ppi, opr)
     feats = {m: build_features(cpi, exog, m) for m in ("leaky", "fixed")}
@@ -372,8 +517,11 @@ def run_backtest(cpi, ppi, opr, start="2018-01-01", retrain_every=12,
 
     if origins is None:
         origins = [d for d in dates if d >= pd.Timestamp(start)][:-1][::origin_step]
+    if models and "ens_ets_direct" in models:
+        models = list(set(models) | {"ets", "xgb_direct_growth"})
     want = set(models or ["naive", "snaive_growth", "drift", "ets",
-                          "xgb_as_deployed", "xgb_leak_fixed", "xgb_leaky_onestep"])
+                          "xgb_as_deployed", "xgb_leak_fixed", "xgb_leaky_onestep",
+                          "xgb_direct_growth", "ens_ets_direct"])
     if not use_ets:
         want.discard("ets")
     if "ets" in want:
@@ -385,6 +533,9 @@ def run_backtest(cpi, ppi, opr, start="2018-01-01", retrain_every=12,
 
     logger.info(f"{len(series)} series, {len(dates)} months "
                 f"({dates[0]:%Y-%m}..{dates[-1]:%Y-%m}), {len(origins)} origins, models={sorted(want)}")
+
+    dfeat = build_direct_features(Yv, series, dates, exog_cal) if "xgb_direct_growth" in want else None
+    direct_cache = {}
 
     out, xgb_cache, diag = [], {}, {"origins_with_missing_ppi": 0}
     for i, T in enumerate(origins):
@@ -441,6 +592,17 @@ def run_backtest(cpi, ppi, opr, start="2018-01-01", retrain_every=12,
                     pos = series.get_indexer(pd.MultiIndex.from_frame(row[["state", "division"]]))
                     arr[pos[pos >= 0], 0] = p[pos >= 0]
                 preds["xgb_leaky_onestep"] = arr
+
+        if "xgb_direct_growth" in want:
+            key = (i // retrain_every) if retrain_every > 0 else i
+            if key not in direct_cache:
+                direct_cache = {key: {h: train_direct(dfeat, h, ti) for h in direct_horizons}}
+                logger.info(f"  [{T:%Y-%m}] trained xgb_direct_growth (h={list(direct_horizons)})")
+            preds["xgb_direct_growth"] = fc_direct(direct_cache[key], dfeat, ti, Yhist)
+
+        if "ens_ets_direct" in want and "ets" in preds and "xgb_direct_growth" in preds:
+            # forecast combination: geometric mean of the two predicted index paths
+            preds["ens_ets_direct"] = np.sqrt(preds["ets"] * preds["xgb_direct_growth"])
 
         # naive 1-step in-sample MAE per series -> MASE scale
         scale = np.nanmean(np.abs(np.diff(Yhist, axis=0)), axis=0)
@@ -513,7 +675,7 @@ def score(res: pd.DataFrame, horizons=(1, 3, 6, 12)) -> pd.DataFrame:
 
 
 def report(summary: pd.DataFrame, diag: dict, source: str) -> str:
-    order = ["naive", "snaive_growth", "drift", "ets", "xgb_leak_fixed",
+    order = ["naive", "snaive_growth", "drift", "ets", "xgb_direct_growth", "ens_ets_direct", "xgb_leak_fixed",
              "xgb_as_deployed", "xgb_leaky_onestep"]
     lines = [f"# CPI forecast backtest ({source})", ""]
     if source == "synthetic":
@@ -523,6 +685,9 @@ def report(summary: pd.DataFrame, diag: dict, source: str) -> str:
         "**rel_mae** < 1.00 means the model beats the naive forecast "
         "(\"next month = this month\"). **mae_pp** = mean error of the cumulative "
         "% change, in percentage points.", "",
+        "`ets` and `ens_ets_direct` run on every 3rd origin (ETS is slow), so compare "
+        "models with **rel_mae**, which is computed on matched forecasts; mae_pp/mase/dir_acc "
+        "for those two cover a subset of origins.", "",
         "`xgb_leaky_onestep` is scored the way train.py scored it (leaky features, "
         "one step). It is not a real forecast — it shows how much the leak flatters the reported metrics.", "",
     ]
@@ -558,7 +723,8 @@ def self_test() -> None:
     cpi, ppi, opr = make_synthetic()
     T = pd.Timestamp("2023-06-01")
     kw = dict(origins=[T], retrain_every=0, use_ets=True, ets_window=60,
-              models=["naive", "snaive_growth", "drift", "ets", "xgb_as_deployed", "xgb_leak_fixed"])
+              models=["naive", "snaive_growth", "drift", "ets", "xgb_as_deployed", "xgb_leak_fixed",
+                      "xgb_direct_growth"])
 
     clean, _ = run_backtest(cpi, ppi, opr, **kw)
 
@@ -582,7 +748,9 @@ def self_test() -> None:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--source", choices=["bigquery", "dosm", "synthetic"], default="bigquery")
+    ap.add_argument("--source", choices=["bigquery", "dosm", "files", "synthetic"], default="bigquery")
+    ap.add_argument("--data-dir", default="data", help="folder of DOSM parquet files for --source files")
+    ap.add_argument("--models", nargs="+", default=None, help="subset of models to run")
     ap.add_argument("--project", default=os.getenv("GCP_PROJECT_ID", "modular-rush-495414-i2"))
     ap.add_argument("--dataset", default="dbt_")
     ap.add_argument("--start", default="2018-01-01", help="first forecast origin")
@@ -603,19 +771,22 @@ def main():
         cpi, ppi, opr = load_bigquery(a.project, a.dataset)
     elif a.source == "dosm":
         cpi, ppi, opr = load_dosm()
+    elif a.source == "files":
+        cpi, ppi, opr = load_files(a.data_dir)
     else:
         cpi, ppi, opr = make_synthetic()
 
     res, diag = run_backtest(cpi, ppi, opr, start=a.start, retrain_every=a.retrain_every,
                              use_ets=not a.no_ets, ets_window=a.ets_window,
-                             ets_every=a.ets_every, origin_step=a.origin_step)
+                             ets_every=a.ets_every, origin_step=a.origin_step,
+                             models=a.models)
     summary = score(res)
 
     os.makedirs(a.out, exist_ok=True)
     res.to_parquet(os.path.join(a.out, "forecasts.parquet"), index=False)
     summary.to_csv(os.path.join(a.out, "summary.csv"), index=False)
     md = report(summary, diag, a.source)
-    with open(os.path.join(a.out, "report.md"), "w") as f:
+    with open(os.path.join(a.out, "report.md"), "w", encoding="utf-8") as f:
         f.write(md)
     print("\n" + md)
     logger.info(f"Wrote {a.out}/forecasts.parquet, summary.csv, report.md")
