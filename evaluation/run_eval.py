@@ -27,6 +27,21 @@ from scorer import (score_faithfulness, score_answer_relevancy, score_context_pr
 API_URL = os.getenv("API_URL", "http://localhost:8081")
 THRESHOLD = 0.7
 PAUSE_S = float(os.getenv("EVAL_PAUSE_SECONDS", "5"))   # stay under Gemini rate limits
+# Stop early when Gemini is clearly down, instead of retrying every call:
+MAX_CONSECUTIVE_UNAVAILABLE = int(os.getenv("EVAL_MAX_CONSECUTIVE_UNAVAILABLE", "3"))
+MAX_MINUTES = float(os.getenv("EVAL_MAX_MINUTES", "30"))     # whole-run budget (a slow-but-working Gemini day took ~22 min)
+
+
+class Abort(RuntimeError):
+    """Gemini/API unavailable too often, or the time budget ran out."""
+
+
+_state = {"consecutive_unavailable": 0, "started": time.time()}
+
+
+def _check_budget():
+    if (time.time() - _state["started"]) / 60 > MAX_MINUTES:
+        raise Abort(f"time budget of {MAX_MINUTES:.0f} min exceeded")
 
 
 def call_ask_endpoint(question: str, needs_live_data: bool, **kwargs) -> dict:
@@ -58,10 +73,16 @@ def call_ask_endpoint(question: str, needs_live_data: bool, **kwargs) -> dict:
 
 def _try(score_fn, *args):
     """A metric's score, or None if Gemini stayed unavailable after retries."""
+    _check_budget()
     try:
-        return score_fn(*args)["score"]
+        score = score_fn(*args)["score"]
+        _state["consecutive_unavailable"] = 0
+        return score
     except JudgeUnavailable as e:
+        _state["consecutive_unavailable"] += 1
         print(f"  !! skipped {score_fn.__name__}: Gemini unavailable ({e})")
+        if _state["consecutive_unavailable"] >= MAX_CONSECUTIVE_UNAVAILABLE:
+            raise Abort(f"Gemini unavailable for {MAX_CONSECUTIVE_UNAVAILABLE} calls in a row")
         return None
 
 
@@ -109,13 +130,24 @@ def main():
     print(f"Running evaluation against {API_URL}...")
     print(f"Total test cases: {len(TEST_QUESTIONS)}\n")
 
+    _state.update(consecutive_unavailable=0, started=time.time())
     results = []
     for tc in TEST_QUESTIONS:
         try:
+            _check_budget()
             results.append(run_single_evaluation(tc))
         except JudgeUnavailable as e:
             print(f"  !! skipped question, API/Gemini unavailable: {e}")
             results.append({"question": tc["question"], "unavailable": True})
+            _state["consecutive_unavailable"] += 1
+            if _state["consecutive_unavailable"] >= MAX_CONSECUTIVE_UNAVAILABLE:
+                print(f"\n⚠️ INCOMPLETE — stopping early: API/Gemini unavailable {MAX_CONSECUTIVE_UNAVAILABLE} times in a row. "
+                      "This is an infrastructure problem, not an answer-quality result. Re-run later.")
+                exit(2)
+        except Abort as e:
+            print(f"\n⚠️ INCOMPLETE — stopping early: {e}. "
+                  "This is an infrastructure problem, not an answer-quality result. Re-run later.")
+            exit(2)
 
     metrics = ["faithfulness", "answer_relevancy", "context_precision", "correctness", "refusal"]
     expected = sum(4 if not tc.get("expect_refusal") else 2 for tc in TEST_QUESTIONS)
