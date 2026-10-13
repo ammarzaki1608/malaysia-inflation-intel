@@ -7,12 +7,10 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install ingestion dependencies
+# Install all pipeline dependencies (ingest, dbt + BigQuery adapter, forecaster)
+# from one fully pinned lock file, so rebuilds are reproducible
 COPY ingestion/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install dbt with the BigQuery adapter
-RUN pip install --no-cache-dir dbt-bigquery==1.11.1
 
 # Copy ingestion code
 COPY ingestion/ ./

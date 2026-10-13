@@ -14,3 +14,9 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+variable "alert_email" {
+  description = "Email address notified when the monthly pipeline job fails. Leave empty to skip creating alerts."
+  type        = string
+  default     = ""
+}

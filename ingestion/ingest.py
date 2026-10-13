@@ -110,10 +110,10 @@ def validate_data(df, dataset_name):
         if null_dates > 0:
             errors.append(f"{dataset_name}: {null_dates} null dates found")
 
-    min_rows = {"cpi_state": 100, "cpi_national": 500, "ppi_heaadline": 100}
+    min_rows = {"cpi_state": 100, "cpi_national": 500, "ppi_headline": 100}
     if dataset_name in min_rows and len(df) < min_rows[dataset_name]:
         errors.append(
-            f"{dataset_name}: Only {len(df)} rows, expected <= {min_rows[dataset_name]}"
+            f"{dataset_name}: Only {len(df)} rows, expected at least {min_rows[dataset_name]}"
         )
 
     if errors:
@@ -156,7 +156,7 @@ def main():
             target = sys.argv[1]
             if target not in DATASETS:
                 logger.error(f"Unknown dataset: {target}")
-                logger.error(f"Available: {', '.join(DATASETS.keys(()))}")
+                logger.error(f"Available: {', '.join(DATASETS.keys())}")
                 sys.exit(1)
             dataset_to_ingest = {target: DATASETS[target]}
         else:
