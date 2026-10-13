@@ -235,6 +235,7 @@ def get_forecast(state: str, division: str, horizon_months: int) -> dict:
             "forecasts": steps,
             "latest_real_date": rows[0]["base_date"],
             "latest_real_index": rows[0]["base_index"],
+            "past_12m_change_pct": rows[0].get("past_12m_change_pct"),
             "model_version": forecast_meta.get("version"),
             "interval_level": forecast_meta.get("interval_level"),
             "source": "precomputed",
@@ -508,8 +509,11 @@ async def forecast(
             detail="horizon_months must be 3, 6, or 12"
         )
 
-    result = get_forecast(state, division, horizon_months)
+    return _forecast_payload(state, division, horizon_months)
 
+
+def _forecast_payload(state: str, division: str, horizon_months: int) -> dict:
+    result = get_forecast(state, division, horizon_months)
     return {
         "state": state,
         "division": division,
@@ -518,10 +522,45 @@ async def forecast(
         "forecast": result["forecasts"],
         "latest_real_date": result["latest_real_date"],
         "latest_real_index": result.get("latest_real_index"),
+        "past_12m_change_pct": result.get("past_12m_change_pct"),
         "model_version": result.get("model_version"),
         "interval_level": result.get("interval_level"),
         "source": result["source"],
     }
+
+
+@app.get("/forecasts")
+@limiter.limit("30/minute")
+async def forecasts_bulk(
+    request: Request,
+    state: str,
+    divisions: str,
+    horizon_months: int = 6,
+):
+    """
+    Forecasts for several categories of one state in ONE request.
+
+    The app needs every category a user spends on (up to 13, or 26 for the
+    Relocation Planner). Calling /forecast per category burned through the
+    per-IP rate limit after a click or two — and all app users share the app
+    server's IP. Example: GET /forecasts?state=Selangor&divisions=01,04,07&horizon_months=6
+    """
+    if state not in STATES:
+        raise HTTPException(status_code=400, detail=f"Unknown state: {state}")
+    if horizon_months not in (3, 6, 12):
+        raise HTTPException(status_code=400, detail="horizon_months must be 3, 6, or 12")
+    divs = [d.strip() for d in divisions.split(",") if d.strip()]
+    bad = [d for d in divs if d not in CATEGORIES]
+    if not divs or bad:
+        raise HTTPException(status_code=400, detail=f"Unknown or missing division codes: {bad or divisions}")
+
+    out, errors = {}, {}
+    for d in dict.fromkeys(divs):          # de-duplicate, keep order
+        try:
+            out[d] = _forecast_payload(state, d, horizon_months)
+        except HTTPException as e:
+            errors[d] = e.detail
+    return {"state": state, "horizon_months": horizon_months, "forecasts": out, "errors": errors}
 
 @app.get("/price-ratio")
 @limiter.limit("30/minute")
@@ -532,8 +571,12 @@ async def price_ratio(
     division: str,
 ):
     """
-    Returns the current price ratio between two states for one category.
-    Used to auto-scale a user's spending when comparing states.
+    DEPRECATED — no longer used by the app.
+
+    Returns destination CPI index / origin CPI index. Each state's index measures
+    price CHANGE relative to its own base period, not price LEVEL, so this ratio
+    does not say which state is more expensive. Kept only for backwards
+    compatibility; the Relocation Planner now uses HIES household expenditure.
     """
     if origin_state not in STATES:
         raise HTTPException(status_code=400, detail=f"Unknown origin state: {origin_state}")
@@ -705,35 +748,44 @@ async def category_leaderboard(request: Request):
 @limiter.limit("30/minute")
 async def state_leaderboard(request: Request, division: str):
     """
-    Returns the current CPI index for every state, for one category,
-    ranked highest first. Used to show relative cost differences
-    across states in Data Explorer.
+    Year-on-year % change in one category's CPI for every state, fastest-rising
+    first. (Ranking by index LEVEL would be meaningless: each state's index
+    measures change from its own base period, not how expensive the state is.)
     """
     if division not in CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Unknown division code: {division}")
 
-    global bq_client
-    if bq_client is None:
-        bq_client = bigquery.Client(project=PROJECT_ID)
+    maybe_refresh_forecast_table()
+    results = [
+        {"state": st_, "yoy_change_pct": rows[0]["past_12m_change_pct"],
+         "cpi_index": rows[0]["base_index"], "latest_date": rows[0]["base_date"]}
+        for (st_, div), rows in forecast_rows.items()
+        if div == division and rows and rows[0].get("past_12m_change_pct") is not None
+    ]
 
-    query = f"""
-        select state, cpi_index
-        from `{PROJECT_ID}.dbt_.mart_cpi_features`
-        where division = @division
-          and cpi_index is not null
-        qualify row_number() over (partition by state order by date desc) = 1
-    """
+    if not results:  # forecast table unavailable -> compute from the mart
+        global bq_client
+        if bq_client is None:
+            bq_client = bigquery.Client(project=PROJECT_ID)
+        query = f"""
+            select state, cpi_index, cpi_lag_12, date
+            from `{PROJECT_ID}.dbt_.mart_cpi_features`
+            where division = @division
+              and cpi_index is not null
+            qualify row_number() over (partition by state order by date desc) = 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("division", "STRING", division)]
+        )
+        for r in bq_client.query(query, job_config=job_config).result():
+            if r["cpi_lag_12"]:
+                results.append({
+                    "state": r["state"],
+                    "yoy_change_pct": round((r["cpi_index"] / r["cpi_lag_12"] - 1) * 100, 2),
+                    "cpi_index": r["cpi_index"], "latest_date": str(r["date"]),
+                })
 
-    job_config = bigquery.QueryJobConfig(
-        query_parameters=[
-            bigquery.ScalarQueryParameter("division", "STRING", division),
-        ]
-    )
-
-    rows = list(bq_client.query(query, job_config=job_config).result())
-    results = [{"state": r["state"], "cpi_index": r["cpi_index"]} for r in rows]
-    results.sort(key=lambda x: x["cpi_index"], reverse=True)
-
+    results.sort(key=lambda x: x["yoy_change_pct"], reverse=True)
     return {"division": division, "category_name": CATEGORIES.get(division, division), "states": results}
 
 @app.get("/headline-inflation")

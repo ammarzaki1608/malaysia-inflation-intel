@@ -17,9 +17,9 @@ Malaysia's official CPI is a single national average. A person in Kelantan spend
 
 ## What It Does
 
-**📊 Personal Budget Forecast** — enter your salary and real spending in ringgit per category. Get a 3/6/12-month recursive forecast per category with honestly-widening confidence intervals, a plain-language interpretation of your result against the live national headline rate, and an AI-generated general budgeting suggestion grounded in your own numbers.
+**📊 Personal Budget Forecast** — enter your salary and real spending in ringgit per category. See your **personal inflation over the past 12 months** next to the official rate over the same period (like-for-like). Then see a 3/6/12-month forecast per category with backtest-calibrated 80% ranges, plus an AI-generated general budgeting suggestion grounded in your own numbers.
 
-**🗺️ Relocation Planner** — compare cost of living between any two Malaysian states. Destination spending is auto-suggested using real DOSM price ratios (editable if your habits will change), with a salary-needed estimate and the same AI-generated insight layer.
+**🗺️ Relocation Planner** — compare cost of living between any two Malaysian states. Destination spending starts from the difference in average household spending (DOSM HIES 2022) and is fully editable. Each state's prices are then forecast forward, with a salary-needed estimate and the same AI-generated insight layer. (It deliberately doesn't divide one state's CPI index by another's: index levels measure change since a base period, not how expensive a state is.)
 
 **📈 Data Explorer** — a national overview (headline inflation, category leaderboard, state leaderboard) before drilling into historical CPI/PPI/OPR trends for any state and category, with hover-annotated real policy events (e.g. the 2024 SST rate increase, the 2024 targeted diesel subsidy).
 
@@ -165,7 +165,7 @@ All data is publicly available from the Malaysian government with no authenticat
 | Producer Price Index (PPI) | DOSM / data.gov.my | 575+ | Monthly |
 | PPI by SITC | DOSM / data.gov.my | 5,175+ | Monthly |
 | Household Income & Expenditure (HIES) | DOSM / data.gov.my | 16 | Survey (2022 edition) |
-| Interest Rates / OPR | BNM / data.gov.my | 5,700+ | Monthly |
+| Bank interest rates (commercial banks' base rate; this dataset has no OPR series) | BNM / data.gov.my | 5,700+ | Monthly |
 
 ---
 

@@ -60,7 +60,7 @@ KNOWLEDGE_BASE = [
     # ── Personal vs headline inflation ──────────────────────────────────────
     {
         "id": "headline_vs_personal_inflation",
-        "text": "Malaysia's official headline inflation rate is a national average based on a fixed basket of goods weighted by typical national spending patterns. An individual's personal inflation rate can differ substantially from the headline figure if their actual spending pattern is concentrated more heavily in categories that are rising faster or slower than that national average.",
+        "text": "Malaysia's official headline inflation rate is a national average based on a fixed basket of goods weighted by typical national spending patterns. An individual's personal inflation rate can differ substantially from the headline figure if their actual spending pattern is concentrated more heavily in categories that are rising faster or slower than that national average. The app compares like with like: your personal inflation over the past 12 months (each category's real price change in your state, weighted by how much you spend on it) against the official rate over the same 12 months. The forecast for the coming months is shown separately as an outlook.",
     },
     {
         "id": "biggest_leak_explainer",
@@ -73,12 +73,12 @@ KNOWLEDGE_BASE = [
 
     # ── Relocation Planner logic ────────────────────────────────────────────
     {
-        "id": "relocation_price_ratio",
-        "text": "The Relocation Planner suggests destination spending amounts by scaling the user's current spending using the current price ratio between the two states for each category — calculated from real DOSM CPI index values, not an estimate. For example, if a category's index is 11.5% higher in the destination state, the suggested amount for that category is scaled up by 11.5%.",
+        "id": "relocation_starting_point",
+        "text": "The Relocation Planner's suggested destination amounts start from the user's current spending, scaled by the difference in average monthly household spending between the two states from DOSM's Household Income and Expenditure Survey 2022. That difference reflects lifestyle and income as well as prices, so it is only a starting point. The app does not compare states' CPI index levels, because each state's index measures how prices changed since its own base period, not how expensive the state is.",
     },
     {
         "id": "relocation_editable_suggestion",
-        "text": "Suggested destination spending amounts in the Relocation Planner are editable because the auto-scaling assumes the user keeps identical spending habits in the new location, which may not hold true — for example, someone might rent a smaller home, or cook at home more often, changing their actual spending pattern beyond what a simple price-ratio scaling would predict.",
+        "text": "Suggested destination spending amounts in the Relocation Planner are editable because the auto-scaling assumes the user keeps identical spending habits in the new location, which may not hold true — for example, someone might rent a smaller home, or cook at home more often, changing their actual spending pattern beyond what an average-household comparison would predict.",
     },
     {
         "id": "relocation_salary_needed",
@@ -106,11 +106,11 @@ KNOWLEDGE_BASE = [
     },
     {
         "id": "app_personal_calculator_purpose",
-        "text": "The Personal Inflation Calculator lets a user enter their monthly salary and actual spending per category in ringgit, then generates a forecast of how that spending is projected to change over 3, 6, or 12 months, compared against the official national inflation rate.",
+        "text": "The Personal Inflation Calculator lets a user enter their monthly salary and actual spending per category in ringgit, then shows their personal inflation over the past 12 months compared with the official rate, and a forecast of how that spending is projected to change over 3, 6, or 12 months with an 80% range.",
     },
     {
         "id": "app_relocation_planner_purpose",
-        "text": "The Relocation Planner helps a user evaluate moving from one Malaysian state to another by comparing their cost of living between the two states, using real price differences, and estimating the salary needed in the new state to maintain the same standard of living.",
+        "text": "The Relocation Planner helps a user evaluate moving from one Malaysian state to another by starting from the difference in average household spending between the two states, letting the user adjust each amount, forecasting how prices will change in each state, and estimating the salary needed in the new state to maintain the same standard of living.",
     },
     {
         "id": "app_data_explorer_purpose",
