@@ -1,0 +1,45 @@
+name: Build images (PR check)
+
+# Build every Docker image on pull requests, without pushing, so a broken
+# Dockerfile or an unresolvable dependency fails here instead of after merge.
+on:
+  pull_request:
+    paths:
+      - 'ml/serving/**'
+      - 'app/streamlit/**'
+      - 'ingestion/**'
+      - 'transform/dbt_project/**'
+      - 'ml/training/backtest.py'
+      - 'ml/training/forecast_batch.py'
+      - '.github/workflows/pr-build.yml'
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            context: ml/serving
+            dockerfile: ml/serving/Dockerfile
+          - name: streamlit-app
+            context: app/streamlit
+            dockerfile: app/streamlit/Dockerfile
+          - name: data-pipeline
+            context: .
+            dockerfile: ingestion/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ${{ matrix.name }} image
+        run: docker build -f ${{ matrix.dockerfile }} -t check-${{ matrix.name }} ${{ matrix.context }}
+
+      - name: Smoke-test imports
+        run: |
+          case "${{ matrix.name }}" in
+            api)           docker run --rm --entrypoint python check-api -c "import api; print('api imports ok')" ;;
+            streamlit-app) docker run --rm --entrypoint python check-streamlit-app -c "import pyarrow, numpy, pandas, streamlit; print('app deps ok', numpy.__version__, pyarrow.__version__)" ;;
+            data-pipeline) docker run --rm --entrypoint sh check-data-pipeline -c "dbt --version && python -c 'import sys; sys.path.insert(0, \"ml/training\"); import forecast_batch, xgboost, statsforecast; xgboost.XGBRegressor(); print(\"pipeline imports ok\")'" ;;
+          esac

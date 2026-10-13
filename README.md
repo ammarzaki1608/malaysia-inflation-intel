@@ -270,8 +270,10 @@ Infrastructure is fully defined in Terraform, including Secret Manager-backed AP
 
 ```bash
 cd infra/terraform
-terraform apply
+terraform apply -var="alert_email=you@example.com"   # emails you if the monthly pipeline fails
 ```
+
+All three images use **fully pinned** requirements (every transitive dependency), and every pull request builds and smoke-tests them (`.github/workflows/pr-build.yml`). An unpinned rebuild once broke the Streamlit app (pyarrow vs NumPy). The pinned pipeline environment was also how a missing `scikit-learn` in the pipeline image was caught.
 
 Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 
