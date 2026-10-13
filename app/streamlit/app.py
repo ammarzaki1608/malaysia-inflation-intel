@@ -98,7 +98,7 @@ LANG = {
         "category_leaderboard_header": "Which categories are rising fastest?",
         "category_leaderboard_caption": "Year-on-year change, nationally, across all 13 CPI categories.",
         "state_leaderboard_header": "How does this category compare across states?",
-        "state_leaderboard_caption": "Current index by state for the category selected below.",
+        "state_leaderboard_caption": "How much prices in the category below rose over the past 12 months, by state. (Index levels can't be compared between states, so we rank by change.)",
         "explore_further_text": "Want to see how this plays out over time in your state? Explore below.",
     },
     "ms": {
@@ -158,7 +158,7 @@ LANG = {
         "category_leaderboard_header": "Kategori mana yang meningkat paling pantas?",
         "category_leaderboard_caption": "Perubahan tahun ke tahun, secara kebangsaan, merentasi semua 13 kategori CPI.",
         "state_leaderboard_header": "Bagaimana kategori ini dibandingkan antara negeri?",
-        "state_leaderboard_caption": "Indeks semasa mengikut negeri bagi kategori yang dipilih di bawah.",
+        "state_leaderboard_caption": "Kenaikan harga kategori di bawah dalam 12 bulan lalu, mengikut negeri. (Paras indeks tidak boleh dibandingkan antara negeri, jadi kami menyusun mengikut perubahan.)",
         "explore_further_text": "Nak lihat bagaimana ia berlaku dari semasa ke semasa di negeri anda? Terokai di bawah.",
     }
 }
@@ -240,7 +240,7 @@ st.markdown("""
 # ── helper functions ──────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_price_ratio(origin_state: str, destination_state: str, division: str) -> dict:
-    """Get the current price ratio between two states for one category."""
+    """Deprecated: no longer used (CPI index ratios don't measure relative cost). Kept for reference."""
     try:
         response = httpx.get(
             f"{API_URL}/price-ratio",
@@ -257,6 +257,37 @@ def fetch_price_ratio(origin_state: str, destination_state: str, division: str) 
         return None
 
 
+@st.cache_data(ttl=300)
+def fetch_forecasts(state: str, divisions: tuple, horizon_months: int) -> dict:
+    """
+    All requested categories for one state in a single API call ({division: result}).
+    One click used to send one request per category, which hit the API's
+    per-IP rate limit. Falls back to per-category calls if the API is older.
+    """
+    if not divisions:
+        return {}
+    try:
+        response = httpx.get(
+            f"{API_URL}/forecasts",
+            params={"state": state, "divisions": ",".join(divisions), "horizon_months": horizon_months},
+            timeout=30.0,
+        )
+        if response.status_code == 404:          # API without the bulk endpoint
+            raise LookupError
+        response.raise_for_status()
+        return response.json()["forecasts"]
+    except LookupError:
+        results = {}
+        for d in divisions:
+            r = fetch_forecast(state, d, horizon_months)
+            if r:
+                results[d] = r
+        return results
+    except Exception as e:
+        st.error(f"API error: {e}")
+        return {}
+
+
 def forecast_base_index(forecast_list: list) -> float:
     """
     The index to measure change FROM: the latest real CPI value (base_index, sent
@@ -270,8 +301,8 @@ def forecast_base_index(forecast_list: list) -> float:
 @st.cache_data(ttl=300)
 def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
     """
-    Call the FastAPI /forecast endpoint for a multi-month
-    recursive prediction of one category.
+    Call the FastAPI /forecast endpoint for a 1–12 month forecast
+    (with 80% range) of one category.
     """
     try:
         response = httpx.get(
@@ -570,7 +601,7 @@ def render_home(t, lang):
         card1_body = "Enter your salary and how much you spend per category in ringgit. We project your spending 3, 6, or 12 months ahead, show you how it compares to official inflation, and flag which category is quietly eating into your budget the most."
         card1_best = "Best for: seeing what your money actually buys next year."
         card2_title = "Relocation Planner"
-        card2_body = "Thinking of moving to KL, Johor, or another state? We auto-scale your current spending using real price differences between states, forecast both side by side in ringgit, and estimate the salary you'd need to keep your standard of living."
+        card2_body = "Thinking of moving to KL, Johor, or another state? We start from how much the average household spends in each state (DOSM HIES 2022), let you adjust every amount, forecast both side by side in ringgit, and estimate the salary you'd need to keep your standard of living."
         card2_best = "Best for: evaluating a job offer in another state."
         cta_text = "👈 Choose a mode from the sidebar to get started."
         ready_text = "Ready to find out your personal inflation rate?"
@@ -585,12 +616,12 @@ def render_home(t, lang):
         data_intro = "All data is sourced from official Malaysian government APIs — no third-party or estimated data. Updated monthly."
         disclaimer_header = "⚠️ Important disclaimer — please read"
         dosm_body = "Department of Statistics Malaysia — monthly CPI by state and category, Producer Price Index, and household income survey data."
-        bnm_body = "Monthly interest rate data including the Overnight Policy Rate (OPR) — used as an economic signal in the forecast model."
-        model_body = "Trained on 2010–2026 data across 208 state-category series. 97% accuracy in predicting the direction of inflation movement."
+        bnm_body = "Monthly bank interest rates — the commercial banks' average base rate, which follows the Overnight Policy Rate (OPR), is a minor input to the forecasts."
+        model_body = "An average of two models (ETS and XGBoost), retrained monthly on 2010–2026 data across 208 state-category series. Backtested on 2018–2026: modestly more accurate than assuming prices stay the same, with 80% ranges that held 81% of the time."
         disclaimer_body = """
         - This tool uses **state-level average data** from DOSM. Actual prices vary by neighbourhood, shop, and lifestyle — this is a planning guide, not a guarantee.
-        - Multi-month forecasts use **recursive prediction** — each month's forecast is partly built on the previous month's forecast, so accuracy naturally decreases the further out you look. Treat 12-month forecasts as directional, not precise.
-        - Destination spending in the Relocation Planner is **auto-scaled using today's price ratio** between states — it assumes you'll keep the same spending habits, which may not hold if your lifestyle changes significantly.
+        - Short-term inflation is **only modestly predictable** — prices often stay flat month to month. Forecasts come with an **80% range** that widens further ahead; treat them as direction and rough size, not exact figures.
+        - Destination spending in the Relocation Planner **starts from the difference in average household spending** between states (HIES 2022). That reflects lifestyle and income as well as prices, so adjust the amounts to your own expectations.
         - Income and expenditure figures come from the **HIES 2022 survey** and may not reflect current conditions precisely.
         - The official inflation figure shown for comparison is pulled **live from official DOSM national CPI data**, comparing the most recent published month against the same month one year earlier.
         - This is an **independent research project** — not affiliated with DOSM, BNM, or any government agency.
@@ -613,7 +644,7 @@ def render_home(t, lang):
         card1_body = "Masukkan gaji dan jumlah perbelanjaan anda mengikut kategori dalam unit Ringgit. Kami akan membuat unjuran perbelanjaan anda untuk tempoh 3, 6, atau 12 bulan akan datang, membandingkannya dengan inflasi rasmi, dan mengenal pasti kategori yang paling banyak menelan belanjawan anda secara diam-diam."
         card1_best = "Sesuai untuk: Mengetahui kuasa beli sebenar wang anda pada tahun hadapan."
         card2_title = "Perancang Perpindahan"
-        card2_body = "Sedang mempertimbangkan untuk berpindah ke Kuala Lumpur, Johor, atau negeri lain? Kami akan melaraskan perbelanjaan semasa anda secara automatik berdasarkan perbezaan harga sebenar antara negeri, memaparkan unjuran perbandingan dalam unit Ringgit, dan menganggarkan gaji yang diperlukan untuk mengekalkan taraf hidup anda."
+        card2_body = "Sedang mempertimbangkan untuk berpindah ke Kuala Lumpur, Johor, atau negeri lain? Kami bermula dengan purata perbelanjaan isi rumah di setiap negeri (HIES DOSM 2022), membenarkan anda melaraskan setiap jumlah, memaparkan unjuran perbandingan dalam unit Ringgit, dan menganggarkan gaji yang diperlukan untuk mengekalkan taraf hidup anda."
         card2_best = "Sesuai untuk: Menilai tawaran pekerjaan di negeri lain."
         cta_text = "👈 Pilih mod daripada bar sisi untuk bermula."
         ready_text = "Sedia untuk mengetahui kadar inflasi peribadi anda?"
@@ -628,12 +659,12 @@ def render_home(t, lang):
         data_intro = "Semua data diperoleh daripada API rasmi kerajaan Malaysia — tiada data pihak ketiga atau data anggaran digunakan. Dikemas kini pada setiap bulan."
         disclaimer_header = "⚠️ Penafian penting — sila baca"
         dosm_body = "Jabatan Perangkaan Malaysia (DOSM) — data CPI bulanan mengikut negeri dan kategori, Indeks Harga Pengeluar (PPI), dan penyiasatan pendapatan isi rumah."
-        bnm_body = "Data kadar faedah bulanan termasuk Kadar Dasar Semalaman (OPR) — digunakan sebagai isyarat ekonomi dalam model unjuran."
-        model_body = "Dilatih menggunakan data dari tahun 2010–2026 merentasi 208 siri negeri-kategori. Mempunyai ketepatan 97% dalam meramal arah pergerakan inflasi."
+        bnm_body = "Kadar faedah bank bulanan — purata kadar asas bank perdagangan, yang mengikut Kadar Dasar Semalaman (OPR), ialah input kecil kepada unjuran."
+        model_body = "Purata dua model (ETS dan XGBoost), dilatih semula setiap bulan atas data 2010–2026 merentasi 208 siri negeri-kategori. Diuji semula bagi 2018–2026: sedikit lebih tepat berbanding menganggap harga kekal sama, dengan julat 80% yang tepat 81% daripada masa."
         disclaimer_body = """
         - Alat ini menggunakan **data purata peringkat negeri** daripada DOSM. Harga sebenar berbeza mengikut kawasan kejiranan, kedai, dan gaya hidup — ini hanyalah panduan perancangan, bukan jaminan mutlak.
-        - Unjuran berbilang bulan menggunakan **kaedah ramalan rekursif** — unjuran bagi setiap bulan sebahagiannya terbina daripada unjuran bulan sebelumnya, justeru ketepatannya secara semula jadi akan menurun apabila tempoh unjuran semakin jauh. Jadikan unjuran 12 bulan sebagai panduan asas (indikatif), bukan nilai yang tepat.
-        - Perbelanjaan destinasi dalam Perancang Perpindahan **dilaraskan secara automatik menggunakan nisbah harga semasa** antara negeri — fungsi ini mengandaikan anda mengekalkan corak perbelanjaan yang sama, yang mungkin tidak tepat sekiranya gaya hidup anda berubah secara ketara.
+        - Inflasi jangka pendek **hanya boleh diramal secara sederhana** — harga sering kekal sama dari bulan ke bulan. Unjuran disertakan **julat 80%** yang semakin melebar; jadikannya panduan arah dan anggaran saiz, bukan nilai tepat.
+        - Perbelanjaan destinasi dalam Perancang Perpindahan **bermula daripada perbezaan purata perbelanjaan isi rumah** antara negeri (HIES 2022). Ini mencerminkan gaya hidup dan pendapatan, bukan harga sahaja, jadi laraskan jumlah mengikut jangkaan anda.
         - Angka pendapatan dan perbelanjaan diambil daripada **Penyiasatan HIES 2022** (Penyiasatan Pendapatan dan Perbelanjaan Isi Rumah) dan mungkin tidak mencerminkan keadaan semasa dengan tepat.
         "- Angka inflasi rasmi yang dipaparkan untuk tujuan perbandingan diperoleh **secara lansung daripada data CPI kebangsaan rasmi DOSM**, dengan membandingkan data bulan terkini yang diterbitkan dengan bulan yang sama pada tahun sebelumnya."
         - Ini merupakan **projek penyelidikan bebas** — dan tidak mempunyai sebarang kaitan dengan DOSM, BNM, atau mana-mana agensi kerajaan.
@@ -799,10 +830,15 @@ def calculate_budget_forecast(
     category_forecasts = {}
     total_current = 0
     total_projected_final_month = 0
+    total_low = 0
+    total_high = 0
+    past_weighted_sum = 0
+    past_weight = 0
     latest_real_date = None
 
+    bulk = fetch_forecasts(state, tuple(sorted(active_categories)), horizon_months)
     for div, amount in active_categories.items():
-        result = fetch_forecast(state, div, horizon_months)
+        result = bulk.get(div)
         if result is None:
             continue
         
@@ -830,9 +866,27 @@ def calculate_budget_forecast(
 
         total_current += amount
         total_projected_final_month += projected_amounts[-1]
+        # 80% range for the final month, scaled onto the user's RM amount
+        total_low += amount * forecast_list[-1]["lower_bound"] / first_index
+        total_high += amount * forecast_list[-1]["upper_bound"] / first_index
+
+        # realised change over the past 12 months (same basis as the official rate)
+        past = result.get("past_12m_change_pct")
+        category_forecasts[div]["past_12m_change_pct"] = past
+        if past is not None:
+            past_weighted_sum += amount * past
+            past_weight += amount
 
     if not category_forecasts:
         return None
+
+    # ── personal inflation over the PAST 12 months ─────────────────────────────
+    # Real CPI changes for each category, weighted by the user's own spending —
+    # the same construction and period as the official headline rate, so the
+    # two can be compared directly. None if the API didn't supply past changes.
+    personal_past_12m_pct = (
+        round(past_weighted_sum / past_weight, 2) if past_weight > 0 else None
+    )
 
     # ── household-level "felt" inflation ────────────────────────────────────
     # Weighted average of category % changes, weighted by how much
@@ -860,6 +914,9 @@ def calculate_budget_forecast(
         "total_current": round(total_current, 2),
         "total_projected_final": round(total_projected_final_month, 2),
         "felt_inflation_pct": felt_inflation_pct,
+        "personal_past_12m_pct": personal_past_12m_pct,
+        "total_projected_low": round(total_low, 2),
+        "total_projected_high": round(total_high, 2),
         "biggest_leak": {
             "name": biggest_leak[1]["category_name"],
             "change_pct": biggest_leak[1]["change_pct"],
@@ -970,20 +1027,31 @@ def render_personal_calculator(
     st.subheader(report_title)
 
     # ── Plain-language interpretation — tells the user what the number means ─
-    felt = result["felt_inflation_pct"]
+    # Compare the user's PAST 12 months with the official PAST 12 months (same
+    # basis). The forecast below is the outlook, not part of this comparison.
+    felt = result["felt_inflation_pct"]                 # projected, over the horizon
+    personal = result.get("personal_past_12m_pct")      # realised, past 12 months
 
     headline_data = fetch_headline_inflation()
-    headline_pct = headline_data["headline_inflation_pct"] if headline_data else 1.5
-    gap = abs(felt - headline_pct)
+    headline_pct = headline_data["headline_inflation_pct"] if headline_data else None
+    can_compare = personal is not None and headline_pct is not None
+    gap = abs(personal - headline_pct) if can_compare else 0.0
 
-    if gap < 0.5:
+    if not can_compare:
+        interpretation = (
+            "The official comparison isn't available right now — your forecast is shown below."
+            if lang == "en" else
+            "Perbandingan rasmi tidak tersedia buat masa ini — ramalan anda dipaparkan di bawah."
+        )
+        interp_color = "#475569"
+    elif gap < 0.5:
         interpretation = (
             "Your personal inflation is close to the national average — no urgent action needed, but it's worth keeping an eye on the category flagged below."
             if lang == "en" else
             "Inflasi peribadi anda hampir sama dengan purata kebangsaan — tiada tindakan segera diperlukan, tetapi elok pantau kategori yang dikenal pasti di bawah."
         )
         interp_color = "#0F6E5C"
-    elif felt > headline_pct:
+    elif personal > headline_pct:
         interpretation = (
             "Your personal inflation is running noticeably higher than the national average — the category flagged as your biggest leak below is worth addressing first."
             if lang == "en" else
@@ -1015,6 +1083,11 @@ def render_personal_calculator(
             f"RM{result['total_projected_final']:,.0f}",
             delta=f"{delta_rm:+,.0f} RM",
             delta_color="inverse",
+        )
+        st.caption(
+            f"80% range: RM{result['total_projected_low']:,.0f} – RM{result['total_projected_high']:,.0f}"
+            if lang == "en" else
+            f"Julat 80%: RM{result['total_projected_low']:,.0f} – RM{result['total_projected_high']:,.0f}"
         )
     with col3:
         surplus_delta = result["projected_surplus"] - result["current_surplus"]
@@ -1087,27 +1160,47 @@ def render_personal_calculator(
         </div>
         """, unsafe_allow_html=True)
 
-    direction_word = ("higher" if felt > headline_pct else "lower") if lang == "en" else ("lebih tinggi" if felt > headline_pct else "lebih rendah")
-    validation_color = "#dc2626" if felt > headline_pct else "#16a34a"
+    low_pct = (result["total_projected_low"] / result["total_current"] - 1) * 100
+    high_pct = (result["total_projected_high"] / result["total_current"] - 1) * 100
+
+    if can_compare:
+        direction_word = ("higher" if personal > headline_pct else "lower") if lang == "en" else ("lebih tinggi" if personal > headline_pct else "lebih rendah")
+        validation_color = "#dc2626" if personal > headline_pct else "#16a34a"
+    else:
+        validation_color = "#475569"
 
     if lang == "en":
-        reality_text = (
-            f"Official inflation is currently around <b>{headline_pct}%</b>. "
-            f"Based on <b>your actual spending</b>, your personal inflation rate over the next {horizon_months} months "
-            f"is projected at <b style='color:{validation_color}'>{felt:+.2f}%</b> — "
-            f"{abs(felt - headline_pct):.1f} points {direction_word} than the official number."
+        past_text = (
+            f"Over the <b>past 12 months</b>, official inflation was <b>{headline_pct:.1f}%</b>. "
+            f"With <b>your spending mix</b>, your personal inflation over the same 12 months was "
+            f"<b style='color:{validation_color}'>{personal:+.1f}%</b> — "
+            f"{abs(personal - headline_pct):.1f} points {direction_word} than the official rate."
+            if can_compare else
+            "The past-12-month comparison with the official rate is not available right now."
+        )
+        outlook_text = (
+            f"<b>Looking ahead:</b> your monthly spending is projected to change by <b>{felt:+.1f}%</b> "
+            f"over the next {horizon_months} months (80% range {low_pct:+.1f}% to {high_pct:+.1f}%)."
         )
     else:
-        reality_text = (
-            f"Kadar inflasi rasmi pada masa ini adalah sekitar <b>{headline_pct}%</b>. "
-            f"Berdasarkan <b>perbelanjaan sebenar anda</b>, kadar inflasi peribadi anda bagi tempoh {horizon_months} bulan akan datang diunjurkan pada <b style='color:{validation_color}'>{felt:+.2f}%</b> — "
-            f"iaitu {abs(felt - headline_pct):.1f} mata {direction_word} berbanding kadar rasmi."
+        past_text = (
+            f"Dalam <b>12 bulan lalu</b>, inflasi rasmi ialah <b>{headline_pct:.1f}%</b>. "
+            f"Berdasarkan <b>corak perbelanjaan anda</b>, inflasi peribadi anda bagi tempoh 12 bulan yang sama ialah "
+            f"<b style='color:{validation_color}'>{personal:+.1f}%</b> — "
+            f"iaitu {abs(personal - headline_pct):.1f} mata {direction_word} berbanding kadar rasmi."
+            if can_compare else
+            "Perbandingan 12 bulan lalu dengan kadar rasmi tidak tersedia buat masa ini."
+        )
+        outlook_text = (
+            f"<b>Unjuran:</b> perbelanjaan bulanan anda dijangka berubah sebanyak <b>{felt:+.1f}%</b> "
+            f"dalam {horizon_months} bulan akan datang (julat 80%: {low_pct:+.1f}% hingga {high_pct:+.1f}%)."
         )
 
-        st.markdown(f"""
+    st.markdown(f"""
     <div class="summary-box" style="border-left-color:{validation_color}">
         <strong>{t['reality_check_label']}</strong><br><br>
-        {reality_text}
+        {past_text}<br><br>
+        {outlook_text}
     </div>
     """, unsafe_allow_html=True)
 
@@ -1155,9 +1248,9 @@ def render_personal_calculator(
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     footer_note = (
-        "⚠️ Forecasts use recursive prediction — accuracy naturally decreases further into the horizon as the model builds on its own prior predictions. Treat the widening range as a guide, not a guarantee."
+        "⚠️ Forecasts are only modestly better than assuming prices stay the same, and the shaded 80% range widens further ahead. Treat them as a guide, not a guarantee."
         if lang == "en" else
-        "⚠️ Unjuran ini menggunakan kaedah ramalan rekursif — ketepatan secara semula jadi akan menurun apabila tempoh unjuran semakin jauh memandangkan model ini terbina berdasarkan ramalannya yang terdahulu. Jadikan julat yang semakin melebar ini sebagai panduan, bukan satu jaminan mutlak."
+        "⚠️ Unjuran hanya sedikit lebih baik berbanding menganggap harga kekal sama, dan julat 80% yang berlorek melebar apabila tempoh semakin jauh. Jadikannya panduan, bukan jaminan."
     )
     st.caption(footer_note)
 
@@ -1230,16 +1323,21 @@ def render_relocation_planner(
     """
     Relocation Planner — RM-based comparison between two states.
 
-    Auto-suggests destination spending by scaling origin RM amounts
-    by the current price ratio between states, then lets the user
-    adjust before running a full multi-month forecast comparison.
+    Suggests a starting destination budget by scaling origin RM amounts by
+    the difference in average household spending between the two states
+    (DOSM HIES 2022), then lets the user adjust before running a multi-month
+    forecast comparison.
+
+    It deliberately does NOT use the ratio of the states' CPI indices: each
+    state's index measures price change since its own base period, not how
+    expensive the state is, so that ratio says nothing about relative cost.
     """
     if lang == "en":
         page_caption = "Compare your real cost of living between two Malaysian states, in ringgit — using official DOSM and BNM data"
         moving_from_label = "Moving from:"
         moving_to_label = "Moving to"
         suggested_header = "Suggested spending in your new state"
-        suggested_caption = "Auto-scaled from your {origin} spending using current {dest} prices. Adjust any amount if you expect your habits to change."
+        suggested_caption = "Starting point: your {origin} spending scaled by how much more or less the average household spends in {dest} (DOSM HIES 2022). That difference reflects lifestyle and income as well as prices, so adjust each amount to what you expect to spend."
         editable_label = "Your destination budget (editable):"
         compare_button_text = "🔍 Compare full forecast"
         compare_hint = "Click above to run the full multi-month comparison."
@@ -1250,13 +1348,13 @@ def render_relocation_planner(
         salary_needed_label = "Recommended minimum salary in {state}:"
         category_compare_header = "Category-by-category comparison"
         show_more_text = "Show {n} more categories"
-        disclaimer_text = "⚠️ Destination amounts are auto-suggested by scaling your current spending using today's price ratio between states, then forecast forward independently for each state. Forecasts use recursive prediction — treat the further-out months as directional, not exact."
+        disclaimer_text = "⚠️ Destination amounts start from the difference in average household spending between the two states (HIES 2022) and are yours to adjust. Each state's prices are then forecast forward separately; treat further-out months as directional, not exact."
     else:
         page_caption = "Bandingkan kos sara hidup sebenar anda antara dua negeri di Malaysia, dalam unit Ringgit — menggunakan data rasmi DOSM dan BNM"
         moving_from_label = "Berpindah dari:"
         moving_to_label = "Berpindah ke"
         suggested_header = "Cadangan perbelanjaan di negeri baharu anda"
-        suggested_caption = "Dilaraskan secara automatik daripada perbelanjaan {origin} anda menggunakan harga semasa di {dest}. Ubah mana-mana jumlah jika anda menjangkakan perubahan pada corak perbelanjaan anda."
+        suggested_caption = "Titik permulaan: perbelanjaan {origin} anda dilaraskan mengikut perbezaan purata perbelanjaan isi rumah di {dest} (HIES DOSM 2022). Perbezaan ini mencerminkan gaya hidup dan pendapatan, bukan harga sahaja, jadi laraskan setiap jumlah mengikut jangkaan perbelanjaan anda."
         editable_label = "Belanjawan destinasi anda (boleh disunting):"
         compare_button_text = "🔍 Bandingkan unjuran penuh"
         compare_hint = "Klik butang di atas untuk menjana perbandingan penuh bagi beberapa bulan."
@@ -1267,7 +1365,7 @@ def render_relocation_planner(
         salary_needed_label = "Gaji minimum yang disyorkan di {state}:"
         category_compare_header = "Perbandingan mengikut kategori"
         show_more_text = "Papar {n} kategori lagi"
-        disclaimer_text = "⚠️ Jumlah destinasi dicadangkan secara automatik dengan melaraskan perbelanjaan semasa anda menggunakan nisbah harga hari ini antara negeri, kemudian diunjurkan ke hadapan secara berasingan bagi setiap negeri. Unjuran ini menggunakan kaedah ramalan rekursif — jadikan unjuran bulan-bulan yang lebih jauh sebagai panduan asas (indikatif), bukan nilai tepat."
+        disclaimer_text = "⚠️ Jumlah destinasi bermula daripada perbezaan purata perbelanjaan isi rumah antara dua negeri (HIES 2022) dan boleh anda laraskan. Harga setiap negeri kemudian diunjurkan secara berasingan; jadikan bulan-bulan yang lebih jauh sebagai panduan, bukan nilai tepat."
     
     category_labels = CATEGORIES if lang == "en" else CATEGORY_NAMES_MS
     st.title(t["relocation_title"])
@@ -1320,7 +1418,7 @@ def render_relocation_planner(
 
     st.divider()
 
-# ── fetch price ratios for every active category ────────────────────────
+# ── suggested destination spending (HIES household expenditure) ────────────
     st.subheader(suggested_header)
     st.caption(suggested_caption.format(origin=origin_state, dest=destination_state))
 
@@ -1355,31 +1453,31 @@ def render_relocation_planner(
 
     col_left_r1, col_btn_r1, col_right_r1 = st.columns([1, 2, 1])
     with col_btn_r1:
-        if st.button(fetch_ratios_label, type="primary", use_container_width=True):
-            st.session_state.reloc_ratios_generated = True
+        clicked_suggest = st.button(fetch_ratios_label, type="primary", use_container_width=True)
+
+    if clicked_suggest:
+        st.session_state.reloc_ratios_generated = True
         st.session_state.reloc_ratios_last_inputs = current_ratio_snapshot
         ratios_changed = False
 
-        destination_spending = {}
-        ratio_info = {}
+        with st.spinner(f"Comparing {origin_state} and {destination_state}..." if lang == "en"
+                        else f"Membandingkan {origin_state} dan {destination_state}..."):
+            origin_hies = fetch_income_snapshot(origin_state)
+            dest_hies = fetch_income_snapshot(destination_state)
 
-        with st.spinner(f"Comparing prices between {origin_state} and {destination_state}..."):
-            for div, origin_amount in active_spending.items():
-                ratio_data = fetch_price_ratio(origin_state, destination_state, div)
+        o_exp = (origin_hies or {}).get("expenditure_mean")
+        d_exp = (dest_hies or {}).get("expenditure_mean")
+        scale = (d_exp / o_exp) if (o_exp and d_exp) else None
 
-                if ratio_data:
-                    ratio = ratio_data["ratio"]
-                    pct_diff = ratio_data["pct_difference"]
-                else:
-                    ratio = 1.0
-                    pct_diff = 0.0
-
-                suggested_amount = round(origin_amount * ratio)
-                ratio_info[div] = {"ratio": ratio, "pct_diff": pct_diff}
-                destination_spending[div] = suggested_amount
-
-        st.session_state.reloc_destination_spending = destination_spending
-        st.session_state.reloc_ratio_info = ratio_info
+        st.session_state.reloc_destination_spending = {
+            div: round(amount * (scale or 1.0)) for div, amount in active_spending.items()
+        }
+        st.session_state.reloc_ratio_info = {
+            "scale": scale, "origin_expenditure": o_exp, "dest_expenditure": d_exp,
+        }
+        # new suggestions should replace any amounts typed for a previous destination
+        for div in active_spending:
+            st.session_state.pop(f"dest_amt_{div}", None)
 
     if not st.session_state.reloc_ratios_generated:
         st.info(fetch_ratios_hint)
@@ -1389,7 +1487,26 @@ def render_relocation_planner(
         st.warning(ratios_changed_hint)
 
     destination_spending = st.session_state.reloc_destination_spending
-    ratio_info = st.session_state.reloc_ratio_info
+    ratio_info = st.session_state.reloc_ratio_info or {}
+
+    scale = ratio_info.get("scale")
+    if scale:
+        pct_hh = (scale - 1) * 100
+        st.info(
+            f"The average household in {destination_state} spends RM{ratio_info['dest_expenditure']:,.0f} a month, "
+            f"versus RM{ratio_info['origin_expenditure']:,.0f} in {origin_state} ({pct_hh:+.0f}%, DOSM HIES 2022). "
+            "Your amounts below start from that difference."
+            if lang == "en" else
+            f"Purata isi rumah di {destination_state} berbelanja RM{ratio_info['dest_expenditure']:,.0f} sebulan, "
+            f"berbanding RM{ratio_info['origin_expenditure']:,.0f} di {origin_state} ({pct_hh:+.0f}%, HIES DOSM 2022). "
+            "Jumlah di bawah bermula daripada perbezaan tersebut."
+        )
+    else:
+        st.warning(
+            "Household spending data isn't available for one of these states, so your current amounts are used as the starting point."
+            if lang == "en" else
+            "Data perbelanjaan isi rumah tidak tersedia untuk salah satu negeri ini, jadi jumlah semasa anda digunakan sebagai titik permulaan."
+        )
 
     # ── editable destination table ───────────────────────────────────────────
     st.markdown(f"**{editable_label}**")
@@ -1414,7 +1531,9 @@ def render_relocation_planner(
             )
             edited_spending[div] = new_val
         with col_diff:
-            pct = ratio_info[div]["pct_diff"]
+            # difference between what the user expects to spend there and now
+            origin_amt = active_spending[div]
+            pct = (new_val / origin_amt - 1) * 100 if origin_amt else 0.0
             color = "#dc2626" if pct > 0 else "#16a34a"
             st.markdown(
                 f"<span style='color:{color}'>{pct:+.1f}%</span>",
@@ -1457,8 +1576,10 @@ def render_relocation_planner(
 
     col_left_r2, col_btn_r2, col_right_r2 = st.columns([1, 2, 1])
     with col_btn_r2:
-        if st.button(compare_button_text, type="primary", use_container_width=True):
-            st.session_state.reloc_generated = True
+        clicked_compare = st.button(compare_button_text, type="primary", use_container_width=True)
+
+    if clicked_compare:
+        st.session_state.reloc_generated = True
         st.session_state.reloc_last_inputs = current_reloc_snapshot
         reloc_inputs_changed = False
 
@@ -1466,17 +1587,10 @@ def render_relocation_planner(
         dest_results = {}
 
         with st.spinner(spinner_text.format(n=horizon_months)):
-            for div, amount in active_spending.items():
-                origin_forecast = fetch_forecast(origin_state, div, horizon_months)
-                if origin_forecast:
-                    origin_results[div] = origin_forecast
-
-            for div, amount in edited_spending.items():
-                if amount <= 0:
-                    continue
-                dest_forecast = fetch_forecast(destination_state, div, horizon_months)
-                if dest_forecast:
-                    dest_results[div] = dest_forecast
+            origin_results = fetch_forecasts(
+                origin_state, tuple(sorted(active_spending)), horizon_months)
+            dest_results = fetch_forecasts(
+                destination_state, tuple(sorted(d for d, a in edited_spending.items() if a > 0)), horizon_months)
 
         st.session_state.reloc_origin_results = origin_results
         st.session_state.reloc_dest_results = dest_results
@@ -1796,19 +1910,19 @@ def render_data_explorer(t, lang, state):
     state_lb_data = fetch_state_leaderboard(state_lb_division)
     if state_lb_data:
         state_names = [s["state"] for s in state_lb_data["states"]]
-        state_values = [s["cpi_index"] for s in state_lb_data["states"]]
+        state_values = [s["yoy_change_pct"] for s in state_lb_data["states"]]
         highlight_colors = ["#1F4E79" if s == state else "#94A3B8" for s in state_names]
 
         fig_state_lb = go.Figure(go.Bar(
             x=state_values, y=state_names, orientation="h",
             marker_color=highlight_colors,
-            text=[f"{v:.1f}" for v in state_values],
+            text=[f"{v:+.1f}%" for v in state_values],
             textposition="outside",
         ))
         fig_state_lb.update_layout(
             height=440, margin=dict(t=10, b=30, l=140, r=40),
             paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-            xaxis_title="CPI Index" if lang == "en" else "Indeks CPI",
+            xaxis_title="Price change, past 12 months (%)" if lang == "en" else "Perubahan harga, 12 bulan lalu (%)",
             yaxis={"autorange": "reversed"},
         )
         st.plotly_chart(fig_state_lb, use_container_width=True)
@@ -1959,9 +2073,9 @@ def render_data_explorer(t, lang, state):
     # ── OPR vs CPI (dual y-axis) ────────────────────────────────────────────
     st.subheader(t["opr_overlay_header"])
     st.caption(
-        "BNM's interest rate decisions (OPR) are one of the signals our model uses, shown here against inflation trend."
+        "Commercial banks' average base rate (BNM data), which moves with the OPR, shown against the inflation trend. It is a minor input to the forecasts and is only published from about 2022."
         if lang == "en" else
-        "Keputusan kadar faedah BNM (OPR) adalah salah satu isyarat yang digunakan model kami, ditunjukkan di sini berbanding trend inflasi."
+        "Purata kadar asas bank perdagangan (data BNM), yang bergerak seiring OPR, ditunjukkan berbanding trend inflasi. Ia input kecil kepada unjuran dan hanya diterbitkan sejak kira-kira 2022."
     )
 
     fig_opr = go.Figure()
@@ -1971,13 +2085,13 @@ def render_data_explorer(t, lang, state):
     ))
     fig_opr.add_trace(go.Scatter(
         x=dates, y=[row["opr_rate"] for row in series],
-        mode="lines", name="OPR (%)", line=dict(color="#16a34a", width=2), yaxis="y2",
+        mode="lines", name="Bank base rate (%)", line=dict(color="#16a34a", width=2), yaxis="y2",
     ))
     fig_opr.update_layout(
         height=380, margin=dict(t=20, b=40, l=50, r=50),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(title="CPI Index"),
-        yaxis2=dict(title="OPR (%)", overlaying="y", side="right"),
+        yaxis2=dict(title="Base rate (%)", overlaying="y", side="right"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
     st.plotly_chart(fig_opr, use_container_width=True)

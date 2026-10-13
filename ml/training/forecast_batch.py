@@ -75,9 +75,13 @@ def forecast_now(cpi, ppi, opr, ets_window=120):
     rows = []
     for j in np.where(ok)[0]:
         state, div = series[j]
+        # realised change over the past 12 months: the same basis as the official
+        # year-on-year headline rate, so the app can compare like with like
+        past_12m = (Yv[T, j] / Yv[T - 12, j] - 1) * 100 if T >= 12 else np.nan
         for h in range(1, bt.MAX_H + 1):
             rows.append({"state": state, "division": div, "h": h,
                          "base_date": dates[T], "base_index": float(Yv[T, j]),
+                         "past_12m_change_pct": float(past_12m),
                          "target_date": dates[T] + pd.DateOffset(months=h),
                          "predicted_index": float(ens[j, h - 1])})
     return pd.DataFrame(rows), models
@@ -130,6 +134,7 @@ def to_payload(table: pd.DataFrame, skill: pd.Series, version: str) -> dict:
     for c in ("base_index", "predicted_index", "lower_bound", "upper_bound"):
         t[c] = t[c].round(3)
     t["confidence_band_pct"] = t["confidence_band_pct"].round(2)
+    t["past_12m_change_pct"] = t["past_12m_change_pct"].round(2)
     return {
         "meta": {
             "version": version,
