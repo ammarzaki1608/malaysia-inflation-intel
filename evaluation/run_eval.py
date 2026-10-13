@@ -21,10 +21,12 @@ import httpx
 
 from test_questions import TEST_QUESTIONS
 from knowledge_base_mirror import get_texts_for_ids
-from scorer import score_faithfulness, score_answer_relevancy, score_context_precision
+from scorer import (score_faithfulness, score_answer_relevancy, score_context_precision,
+                    score_correctness, score_refusal)
 
 API_URL = os.getenv("API_URL", "http://localhost:8081")
 THRESHOLD = 0.7
+PAUSE_S = float(os.getenv("EVAL_PAUSE_SECONDS", "5"))   # stay under Gemini rate limits
 
 
 def call_ask_endpoint(question: str, needs_live_data: bool, **kwargs) -> dict:
@@ -53,25 +55,31 @@ def run_single_evaluation(test_case: dict) -> dict:
     answer = result["answer"]
     contexts = get_texts_for_ids(result["retrieved_context"])
 
+    scores = {"question": test_case["question"], "answer": answer,
+              "refusal_case": bool(test_case.get("expect_refusal"))}
+
     print("  Scoring faithfulness...")
-    faithfulness = score_faithfulness(answer, contexts)
-    time.sleep(5)
+    scores["faithfulness"] = score_faithfulness(answer, contexts)["score"]
+    time.sleep(PAUSE_S)
+
+    if test_case.get("expect_refusal"):
+        print("  Scoring refusal...")
+        scores["refusal"] = score_refusal(test_case["question"], answer)["score"]
+        time.sleep(PAUSE_S)
+        return scores
 
     print("  Scoring answer relevancy...")
-    relevancy = score_answer_relevancy(test_case["question"], answer)
-    time.sleep(5)
+    scores["answer_relevancy"] = score_answer_relevancy(test_case["question"], answer)["score"]
+    time.sleep(PAUSE_S)
 
     print("  Scoring context precision...")
-    precision = score_context_precision(test_case["question"], contexts)
-    time.sleep(5)
+    scores["context_precision"] = score_context_precision(test_case["question"], contexts)["score"]
+    time.sleep(PAUSE_S)
 
-    return {
-        "question": test_case["question"],
-        "answer": answer,
-        "faithfulness": faithfulness["score"],
-        "answer_relevancy": relevancy["score"],
-        "context_precision": precision["score"],
-    }
+    print("  Scoring correctness vs ground truth...")
+    scores["correctness"] = score_correctness(test_case["question"], answer, test_case["ground_truth"])["score"]
+    time.sleep(PAUSE_S)
+    return scores
 
 
 def main():
@@ -80,31 +88,33 @@ def main():
 
     results = [run_single_evaluation(tc) for tc in TEST_QUESTIONS]
 
+    metrics = ["faithfulness", "answer_relevancy", "context_precision", "correctness", "refusal"]
+
     print("\n" + "=" * 70)
     print("EVALUATION RESULTS")
     print("=" * 70)
-
     for r in results:
         print(f"\nQ: {r['question']}")
-        print(f"  Faithfulness:      {r['faithfulness']:.2f}")
-        print(f"  Answer relevancy:  {r['answer_relevancy']:.2f}")
-        print(f"  Context precision: {r['context_precision']:.2f}")
+        for m in metrics:
+            if m in r:
+                print(f"  {m:<18} {r[m]:.2f}")
 
-    avg_faithfulness = sum(r["faithfulness"] for r in results) / len(results)
-    avg_relevancy = sum(r["answer_relevancy"] for r in results) / len(results)
-    avg_precision = sum(r["context_precision"] for r in results) / len(results)
+    averages = {}
+    for m in metrics:
+        vals = [r[m] for r in results if m in r]
+        if vals:
+            averages[m] = sum(vals) / len(vals)
 
     print("\n" + "=" * 70)
-    print(f"Average faithfulness:      {avg_faithfulness:.3f}")
-    print(f"Average answer relevancy:  {avg_relevancy:.3f}")
-    print(f"Average context precision: {avg_precision:.3f}")
+    for m, v in averages.items():
+        print(f"Average {m:<18} {v:.3f}  (n={sum(1 for r in results if m in r)})")
     print("=" * 70)
 
-    if avg_faithfulness < THRESHOLD or avg_relevancy < THRESHOLD or avg_precision < THRESHOLD:
-        print(f"\n❌ FAILED — one or more metrics below threshold ({THRESHOLD})")
+    failed = [m for m, v in averages.items() if v < THRESHOLD]
+    if failed:
+        print(f"\n❌ FAILED — below threshold ({THRESHOLD}): {', '.join(failed)}")
         exit(1)
-    else:
-        print(f"\n✅ PASSED — all metrics above threshold ({THRESHOLD})")
+    print(f"\n✅ PASSED — all metrics above threshold ({THRESHOLD})")
 
 
 if __name__ == "__main__":

@@ -76,7 +76,7 @@ data.gov.my / OpenDOSM
 ## The RAG Layer
 
 ```
-Knowledge base (25 hand-curated entries)
+Knowledge base (27 hand-curated entries)
         │  embedded once via gemini-embedding-001 (RETRIEVAL_DOCUMENT)
         ▼
 FAISS flat L2 index  ←── stored in GCS, loaded once at API startup
@@ -90,7 +90,14 @@ gemini-3.1-flash-lite  ←── temperature 0.3, strict "never invent facts" sy
 Grounded answer, with retrieved-context IDs returned for traceability
 ```
 
-**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores every answer on faithfulness, answer relevancy, and context precision against a versioned 10-question test set, gating deployment at a 0.7 threshold.
+**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 14-question test set on five metrics:
+- **faithfulness**: no facts beyond the retrieved context
+- **answer relevancy**
+- **context precision**
+- **correctness** against the expected answer
+- **refusal**: for out-of-scope questions, such as an exact future inflation figure or a fund recommendation, the bot must decline rather than invent
+
+It runs in CI against the live API after every API deploy and fails the workflow below a 0.7 threshold. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
 
 ---
 
@@ -124,7 +131,7 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 
 Full tables by period and metric: `docs/backtest_report.md`.
 
-**RAG evaluation** (10-question test set): faithfulness 1.00, answer relevancy 0.95, context precision 1.00.
+**RAG evaluation:** the earlier 10-question run (faithfulness 1.00, relevancy 0.95, precision 1.00) used questions closely matching the knowledge base, with no out-of-scope cases and no correctness check. The expanded 14-question set above replaces it; its results come from the CI run.
 
 ---
 
@@ -181,7 +188,7 @@ malaysia-inflation-intel/
 │   └── serving/
 │       ├── api.py               # FastAPI — forecast, RAG, leaderboard endpoints
 │       ├── rag/
-│       │   ├── knowledge_base.py    # 25 hand-curated entries
+│       │   ├── knowledge_base.py    # 27 hand-curated entries
 │       │   ├── build_index.py       # embeds corpus → FAISS index → GCS
 │       │   └── retriever.py         # loads index, embeds queries, searches
 │       ├── Dockerfile, requirements.txt

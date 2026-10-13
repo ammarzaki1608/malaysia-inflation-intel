@@ -82,3 +82,38 @@ jobs:
             --platform managed \
             --set-env-vars API_URL=${{ needs.deploy-api.outputs.api_url }} \
             --quiet
+  rag-eval:
+    name: Evaluate chatbot answers (post-deploy check)
+    runs-on: ubuntu-latest
+    needs: deploy-api
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      API_URL: ${{ needs.deploy-api.outputs.api_url }}
+      # optional: a stronger model than the one answering, to avoid self-grading
+      JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'gemini-3.1-flash-lite' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if no Gemini key is configured
+        id: guard
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::warning::GEMINI_API_KEY secret not set — skipping RAG evaluation"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.run == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Run evaluation against the deployed API
+        if: steps.guard.outputs.run == 'true'
+        working-directory: evaluation
+        run: |
+          pip install -r requirements.txt
+          curl -sf "$API_URL/health" > /dev/null   # wake the service before timing-sensitive calls
+          python run_eval.py
