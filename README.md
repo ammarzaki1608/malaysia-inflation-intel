@@ -104,6 +104,8 @@ It runs in CI against the live API after every API deploy and fails the workflow
 
 ## Key Results
 
+> 📖 **[Case study: my model was 97% accurate, until I tested it properly](docs/case-study.md)**: how the original metrics turned out to be leakage, how an honest backtest showed the model losing to "no change", and how the redesign fixed it.
+
 Forecasts are evaluated with a **rolling-origin backtest** (`ml/training/backtest.py`). For every month from Jan 2018 to Jul 2026, every model is retrained using only the data available at that date. It then forecasts 1–12 months ahead for all 16 states × 13 categories and is scored against what actually happened. A self-test corrupts all future data and confirms no model's forecast changes.
 
 **Error relative to the naive forecast ("prices stay where they are")**: below 1.00 beats naive.
