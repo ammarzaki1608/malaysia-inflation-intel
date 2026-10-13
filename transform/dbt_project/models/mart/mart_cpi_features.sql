@@ -58,16 +58,20 @@ cpi_with_lags as (
             order by date
         ) as cpi_lag_12,
 
+        -- Moving averages use PRIOR months only. Including the current row
+        -- would put the prediction target inside its own feature (leakage),
+        -- and would not match api.build_features_from_history, which can
+        -- only average months that already exist at forecast time.
         avg(cpi_index) over (
             partition by state, division
             order by date
-            rows between 2 preceding and current row
+            rows between 3 preceding and 1 preceding
         ) as cpi_ma_3,
 
         avg(cpi_index) over (
             partition by state, division
             order by date
-            rows between 11 preceding and current row
+            rows between 12 preceding and 1 preceding
         ) as cpi_ma_12,
 
         case
