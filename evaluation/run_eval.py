@@ -29,7 +29,7 @@ THRESHOLD = 0.7
 PAUSE_S = float(os.getenv("EVAL_PAUSE_SECONDS", "5"))   # stay under Gemini rate limits
 # Stop early when Gemini is clearly down, instead of retrying every call:
 MAX_CONSECUTIVE_UNAVAILABLE = int(os.getenv("EVAL_MAX_CONSECUTIVE_UNAVAILABLE", "3"))
-MAX_MINUTES = float(os.getenv("EVAL_MAX_MINUTES", "20"))     # whole-run time budget
+MAX_MINUTES = float(os.getenv("EVAL_MAX_MINUTES", "30"))     # whole-run budget (a slow-but-working Gemini day took ~22 min)
 
 
 class Abort(RuntimeError):
