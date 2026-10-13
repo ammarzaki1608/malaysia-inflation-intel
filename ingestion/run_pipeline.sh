@@ -4,6 +4,8 @@
 #   1. Ingest fresh data from data.gov.my into GCS + BigQuery raw tables
 #   2. Run dbt to rebuild staging views and mart tables
 #   3. Run dbt tests to catch any data quality regressions
+#   4. Retrain the forecaster on the new data and publish the forecast
+#      table to GCS (the API picks it up within an hour)
 #
 # Exits non-zero on ANY failure — this is what makes the Cloud Run Job
 # report as "Failed" in GCP, which is what triggers alerting.
@@ -15,17 +17,22 @@ echo "  Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "=================================================="
 
 echo ""
-echo "── Step 1/3: Ingesting fresh data from data.gov.my ──"
+echo "── Step 1/4: Ingesting fresh data from data.gov.my ──"
 python ingest.py
 
 echo ""
-echo "── Step 2/3: Running dbt transformations ──"
+echo "── Step 2/4: Running dbt transformations ──"
 cd /app/transform/dbt_project
 dbt run --profiles-dir .
 
 echo ""
-echo "── Step 3/3: Running dbt tests ──"
+echo "── Step 3/4: Running dbt tests ──"
 dbt test --profiles-dir .
+
+echo ""
+echo "── Step 4/4: Retraining forecaster and publishing forecasts ──"
+cd /app/ml/training
+python forecast_batch.py --source bigquery
 
 echo ""
 echo "=================================================="

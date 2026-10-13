@@ -257,6 +257,16 @@ def fetch_price_ratio(origin_state: str, destination_state: str, division: str) 
         return None
 
 
+def forecast_base_index(forecast_list: list) -> float:
+    """
+    The index to measure change FROM: the latest real CPI value (base_index, sent
+    by the API since the precomputed forecasts). Older API responses lack it, so
+    fall back to the first forecast month, the previous behaviour.
+    """
+    first = forecast_list[0]
+    return first.get("base_index") or first["predicted_index"]
+
+
 @st.cache_data(ttl=300)
 def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
     """
@@ -393,10 +403,10 @@ def render_forecast_chart(forecast_data: list, category_name: str, base_amount_r
     steps = [f"Month {f['step']}" for f in forecast_data]
 
     if base_amount_rm is not None:
-        # Convert index values to RM by scaling relative to the
-        # first prediction's index — this turns an abstract index
-        # into "how much you'll actually spend"
-        first_index = forecast_data[0]["predicted_index"]
+        # Convert index values to RM by scaling relative to today's real
+        # index — this turns an abstract index into "how much you'll
+        # actually spend" compared with now
+        first_index = forecast_base_index(forecast_data)
         values      = [base_amount_rm * (f["predicted_index"] / first_index) for f in forecast_data]
         lower       = [base_amount_rm * (f["lower_bound"]      / first_index) for f in forecast_data]
         upper       = [base_amount_rm * (f["upper_bound"]      / first_index) for f in forecast_data]
@@ -800,7 +810,7 @@ def calculate_budget_forecast(
             latest_real_date = result.get("latest_real_date")
 
         forecast_list = result["forecast"]
-        first_index = forecast_list[0]["predicted_index"]
+        first_index = forecast_base_index(forecast_list)   # today's real index
         final_index = forecast_list[-1]["predicted_index"]
 
         # Scale index change onto the user's actual RM amount for this category
@@ -1488,7 +1498,7 @@ def render_relocation_planner(
     # ── compute RM projections for both states ────────────────────────────────
     def project_rm(forecast_result, base_amount):
         forecast_list = forecast_result["forecast"]
-        first_index = forecast_list[0]["predicted_index"]
+        first_index = forecast_base_index(forecast_list)   # today's real index
         final_index = forecast_list[-1]["predicted_index"]
         projected_amounts = [
             base_amount * (f["predicted_index"] / first_index) for f in forecast_list

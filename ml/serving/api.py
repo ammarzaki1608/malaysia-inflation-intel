@@ -1,8 +1,10 @@
 """
 FastAPI prediction service for Malaysia Inflation Intelligence.
 
-Loads the trained XGBoost model from GCS on startup and serves
-recursive multi-month forecasts via REST API.
+Serves CPI forecasts precomputed monthly by ml/training/forecast_batch.py
+(ETS + direct-growth XGBoost average, with 80% ranges calibrated on backtest
+errors). The table is loaded from GCS at startup and re-checked hourly.
+If it is unavailable, the API falls back to the legacy recursive XGBoost.
 
 Endpoints:
     GET  /health              — liveness check
@@ -13,6 +15,8 @@ Endpoints:
 """
 
 import os
+import json
+import time
 import logging
 import tempfile
 import joblib
@@ -40,7 +44,10 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID  = os.getenv("GCP_PROJECT_ID", "modular-rush-495414-i2")
 GCS_BUCKET  = f"{PROJECT_ID}-ml-artifacts"
-MODEL_PATH  = os.getenv("MODEL_GCS_PATH", "models/cpi_forecast_20260619_194024.joblib")
+MODEL_PATH  = os.getenv("MODEL_GCS_PATH", "models/cpi_forecast_20260619_194024.joblib")  # legacy fallback
+FORECAST_GCS_PATH   = os.getenv("FORECAST_GCS_PATH", "forecasts/latest.json")
+FORECAST_LOCAL_PATH = os.getenv("FORECAST_LOCAL_PATH")      # for local testing only
+FORECAST_REFRESH_S  = int(os.getenv("FORECAST_REFRESH_SECONDS", "3600"))
 
 app = FastAPI(
     title="Malaysia Inflation Intelligence API",
@@ -62,6 +69,12 @@ app.add_middleware(
 # Global model and explainer — loaded once at startup
 model      = None
 bq_client  = None
+
+# Precomputed forecast table: {(state, division): [row for h=1..12]}
+forecast_rows: dict = {}
+forecast_meta: dict = {}
+_forecast_generation = None
+_forecast_checked_at = 0.0
 
 # ── constants ────────────────────────────────────────────────────────────────
 STATES = [
@@ -155,10 +168,97 @@ def get_latest_features(state: str, division: str) -> dict:
     return dict(rows[0])
 
 
+def load_forecast_table(force: bool = False) -> bool:
+    """
+    Load the precomputed forecast JSON (from FORECAST_LOCAL_PATH if set, else GCS).
+    Skips the download when the GCS object's generation has not changed.
+    Returns True if a table is loaded after the call.
+    """
+    global forecast_rows, forecast_meta, _forecast_generation, _forecast_checked_at
+    _forecast_checked_at = time.time()
+
+    if FORECAST_LOCAL_PATH:
+        with open(FORECAST_LOCAL_PATH, encoding="utf-8") as f:
+            payload = json.load(f)
+        generation = os.path.getmtime(FORECAST_LOCAL_PATH)
+    else:
+        blob = storage.Client(project=PROJECT_ID).bucket(GCS_BUCKET).blob(FORECAST_GCS_PATH)
+        blob.reload()
+        generation = blob.generation
+        if not force and generation == _forecast_generation and forecast_rows:
+            return True
+        payload = json.loads(blob.download_as_text())
+
+    rows: dict = {}
+    for r in payload["rows"]:
+        rows.setdefault((r["state"], r["division"]), []).append(r)
+    for v in rows.values():
+        v.sort(key=lambda r: r["h"])
+
+    forecast_rows, forecast_meta, _forecast_generation = rows, payload["meta"], generation
+    logger.info(f"Loaded forecast table {forecast_meta.get('version')} "
+                f"(base {forecast_meta.get('base_date')}, {len(rows)} series)")
+    return bool(forecast_rows)
+
+
+def maybe_refresh_forecast_table() -> None:
+    """Re-check for a newer table at most every FORECAST_REFRESH_S seconds; never raises."""
+    if time.time() - _forecast_checked_at < FORECAST_REFRESH_S:
+        return
+    try:
+        load_forecast_table()
+    except Exception as e:
+        logger.warning(f"Forecast table refresh failed, keeping current: {e}")
+
+
+def get_forecast(state: str, division: str, horizon_months: int) -> dict:
+    """
+    Forecast for one series. Uses the precomputed table; falls back to the
+    legacy recursive model only if the table has no entry for this series.
+    """
+    maybe_refresh_forecast_table()
+    rows = forecast_rows.get((state, division))
+    if rows:
+        steps = [
+            {
+                "step": r["h"],
+                "target_date": r["target_date"],
+                "predicted_index": r["predicted_index"],
+                "lower_bound": r["lower_bound"],
+                "upper_bound": r["upper_bound"],
+                "confidence_band_pct": r["confidence_band_pct"],
+                "base_index": r["base_index"],
+            }
+            for r in rows if r["h"] <= horizon_months
+        ]
+        return {
+            "forecasts": steps,
+            "latest_real_date": rows[0]["base_date"],
+            "latest_real_index": rows[0]["base_index"],
+            "model_version": forecast_meta.get("version"),
+            "interval_level": forecast_meta.get("interval_level"),
+            "source": "precomputed",
+        }
+
+    if model is None:
+        try:
+            load_model_from_gcs()
+        except Exception as e:
+            logger.error(f"Legacy model unavailable: {e}")
+            raise HTTPException(status_code=503, detail="Forecasts are not available yet.")
+    result = recursive_forecast(state, division, horizon_months)
+    result["source"] = "legacy_recursive"
+    return result
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Load model and RAG index when API starts up."""
-    load_model_from_gcs()
+    """Load the forecast table (or the legacy model as a fallback) and the RAG index."""
+    try:
+        load_forecast_table(force=True)
+    except Exception as e:
+        logger.warning(f"Forecast table not loaded ({e}); falling back to legacy model")
+        load_model_from_gcs()
     load_index_from_gcs()
 
 
@@ -353,7 +453,10 @@ async def health():
     """Liveness check — returns ok if model is loaded."""
     return {
         "status": "ok",
-        "model_loaded": model is not None,
+        "forecast_table_loaded": bool(forecast_rows),
+        "forecast_version": forecast_meta.get("version"),
+        "forecast_base_date": forecast_meta.get("base_date"),
+        "legacy_model_loaded": model is not None,
         "project": PROJECT_ID,
     }
 
@@ -389,12 +492,10 @@ async def forecast(
     Example:
         GET /forecast?state=Kedah&division=01&horizon_months=6
 
-    Returns a list of monthly predictions with widening
-    confidence bands.
+    Returns monthly predictions with 80% ranges calibrated on backtest
+    errors. Each step carries base_index (the latest real CPI) so clients can
+    measure change from today rather than from the first forecast month.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded yet.")
-
     if state not in STATES:
         raise HTTPException(status_code=400, detail=f"Unknown state: {state}")
 
@@ -407,7 +508,7 @@ async def forecast(
             detail="horizon_months must be 3, 6, or 12"
         )
 
-    result = recursive_forecast(state, division, horizon_months)
+    result = get_forecast(state, division, horizon_months)
 
     return {
         "state": state,
@@ -416,6 +517,10 @@ async def forecast(
         "horizon_months": horizon_months,
         "forecast": result["forecasts"],
         "latest_real_date": result["latest_real_date"],
+        "latest_real_index": result.get("latest_real_index"),
+        "model_version": result.get("model_version"),
+        "interval_level": result.get("interval_level"),
+        "source": result["source"],
     }
 
 @app.get("/price-ratio")
@@ -730,7 +835,7 @@ async def ask(request: Request, body: AskRequest):
         if body.division not in CATEGORIES:
             raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
 
-        forecast_result = recursive_forecast(body.state, body.division, body.horizon_months)
+        forecast_result = get_forecast(body.state, body.division, body.horizon_months)
         category_name = CATEGORIES.get(body.division, body.division)
         forecast_summary = (
             f"Category: {category_name} in {body.state}\n"
