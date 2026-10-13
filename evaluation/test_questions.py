@@ -14,12 +14,12 @@ for regressions before considering the change "done."
 TEST_QUESTIONS = [
     {
         "question": "How does the relocation planner suggest destination spending?",
-        "ground_truth": "It scales the user's current spending by the current price ratio between the origin and destination states, based on real DOSM CPI index values.",
+        "ground_truth": "It starts from the user's current spending scaled by the difference in average monthly household spending between the two states (DOSM HIES 2022), as a starting point the user can edit. It does not compare the states' CPI index levels.",
         "needs_live_data": False,
     },
     {
         "question": "Why can the suggested destination amounts be edited?",
-        "ground_truth": "Because the auto-scaling assumes identical spending habits in the new location, which may not hold true if the user's actual habits change, such as renting a smaller home or cooking more at home.",
+        "ground_truth": "Because the starting point reflects the average household in each state, whose lifestyle and income differ from the user's, so the user should adjust each amount to what they actually expect to spend, for example renting a smaller home or cooking at home more.",
         "needs_live_data": False,
     },
     {
