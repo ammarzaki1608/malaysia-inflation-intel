@@ -2019,10 +2019,10 @@ def main():
     st.markdown("---")
     footer_text = (
         "Malaysia Personal Inflation Intelligence | Data: DOSM & BNM via data.gov.my | "
-        "Model: XGBoost trained on 2010–2026 CPI data | Built by Muhammad Ammar Ahmad Zaki"
+        "Forecasts: ETS + XGBoost ensemble, backtested on 2018–2026 CPI data | Built by Muhammad Ammar Ahmad Zaki"
         if lang == "en" else
         "Maklumat Inflasi Peribadi Malaysia | Data: DOSM & BNM melalui data.gov.my | "
-        "Model: XGBoost dilatih atas data CPI 2010–2026 | Dibina oleh Muhammad Ammar Ahmad Zaki"
+        "Ramalan: gabungan ETS + XGBoost, diuji semula atas data CPI 2018–2026 | Dibina oleh Muhammad Ammar Ahmad Zaki"
     )
     st.markdown(f"""
     <div style='text-align:center;color:#94a3b8;font-size:0.8rem;padding:10px'>
