@@ -1,0 +1,48 @@
+name: Build monthly pipeline image
+
+# The Cloud Run Job (inflation-data-pipeline) runs ingest -> dbt -> forecast_batch.
+# Rebuild its image whenever any of that code changes.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'ingestion/**'
+      - 'transform/dbt_project/**'
+      - 'ml/training/backtest.py'
+      - 'ml/training/forecast_batch.py'
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: modular-rush-495414-i2
+  REGION: asia-southeast1
+  REGISTRY: asia-southeast1-docker.pkg.dev
+  IMAGE: asia-southeast1-docker.pkg.dev/modular-rush-495414-i2/malaysia-inflation-intel/data-pipeline
+
+jobs:
+  build-pipeline:
+    name: Build and register pipeline image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+
+      - name: Build and push (repo root as context — the image needs ingestion/, transform/ and ml/training/)
+        run: |
+          docker build -f ingestion/Dockerfile -t ${{ env.IMAGE }}:latest -t ${{ env.IMAGE }}:${{ github.sha }} .
+          docker push ${{ env.IMAGE }}:latest
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Point the Cloud Run Job at the new image
+        run: |
+          gcloud run jobs update inflation-data-pipeline \
+            --image ${{ env.IMAGE }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --quiet

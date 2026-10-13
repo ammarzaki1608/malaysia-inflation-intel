@@ -20,6 +20,9 @@ COPY ingestion/ ./
 # Copy the dbt project so it's available at /app/transform/dbt_project
 COPY transform/dbt_project ./transform/dbt_project
 
+# Copy the batch forecaster (step 4 of run_pipeline.sh)
+COPY ml/training/backtest.py ml/training/forecast_batch.py ./ml/training/
+
 # Make the pipeline script executable
 RUN chmod +x run_pipeline.sh
 

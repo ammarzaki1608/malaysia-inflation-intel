@@ -50,15 +50,15 @@ data.gov.my / OpenDOSM
         │
         ├──────────────────────────────────────────────┐
         ▼                                              ▼
-[ml/training/train.py]                    [Cloud Scheduler]
-  Prophet baseline + XGBoost,                (cron: 3rd of every month)
-  walk-forward CV, MLflow, SHAP                     │
-  Model saved to GCS                                ▼
+[ml/training/forecast_batch.py]           [Cloud Scheduler]
+  ETS + direct-growth XGBoost average,       (cron: 3rd of every month)
+  80% ranges from backtest errors                   │
+  forecasts/latest.json saved to GCS                ▼
         │                              [Cloud Run Job: inflation-data-pipeline]
-        │                                (re-runs ingest.py → dbt run → dbt test)
+        │                                (ingest.py → dbt run → dbt test → forecast_batch.py)
         ▼
-[ml/serving/api.py]  ←── FastAPI, model + FAISS index loaded from GCS on startup
-        │  /forecast            — recursive multi-month CPI forecast
+[ml/serving/api.py]  ←── FastAPI, forecast table + FAISS index loaded from GCS (table re-checked hourly)
+        │  /forecast            — 1–12 month CPI forecast with 80% range
         │  /price-ratio         — price ratio between two states, one category
         │  /trends              — historical CPI/PPI/OPR time series
         │  /category-leaderboard, /state-leaderboard — national/state rankings
@@ -223,11 +223,13 @@ dbt run
 dbt test
 ```
 
-### 3 — Train the model
+### 3 — Train and publish forecasts
 ```bash
 cd ml/training
-python train.py
+python forecast_batch.py                      # trains, calibrates ranges, uploads forecasts/latest.json to GCS
+# offline: python forecast_batch.py --source files --data-dir ../../data --local-out forecasts.json
 ```
+This runs automatically every month as step 4 of the pipeline job. `train.py` is the legacy recursive model, kept only as the API's fallback.
 
 ### 4 — Build the RAG index (one-time, or after editing knowledge_base.py)
 ```bash
@@ -241,6 +243,7 @@ python build_index.py
 cd ml/serving
 export GEMINI_API_KEY="your-key"
 uvicorn api:app --reload --port 8081
+# or serve a local forecast file: FORECAST_LOCAL_PATH=../training/forecasts.json uvicorn api:app --port 8081
 ```
 
 ### 6 — Start the Streamlit app
@@ -302,7 +305,7 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 - **RAGAS dependency conflict.** The standard RAG evaluation library `ragas` (both 0.4.3 and 0.3.9) hit an unpatched upstream bug — `ragas.llms.base` imports `ChatVertexAI` from a `langchain_community` path that was relocated upstream, confirmed via the library's own GitHub issues (#2741, #2745). The documented workaround (pinning `langchain-community==0.2.17`) then surfaced a separate, unrelated `numpy==1.26.4` binary incompatibility on Python 3.13/Windows. Rather than continue chasing a fragile dependency chain, `evaluation/scorer.py` implements the same LLM-as-judge approach directly on the Gemini API.
 - **Category-specific causal reasoning.** The `/ask` endpoint can explain *how* a metric like "biggest leak" is calculated, but doesn't yet have per-category economic narratives explaining *why* a specific category (e.g. Transport) is moving the way it is, beyond general model mechanics. Documented in `knowledge_base.py` as `category_specific_causes_limitation`.
 - **State-level granularity.** CPI and price data are reported at the state level, not district/city level — DOSM's district-level "Decent Living Expenditure Index" (released Dec 2025) is a logged future improvement, not yet integrated.
-- **Deployed model not yet migrated.** The API still serves the original recursive XGBoost. The direct growth model above exists in the backtest; moving it into `train.py`/`api.py` is the next step.
+- **Forecast ranges are pooled across categories.** The 80% ranges come from the last 36 months of backtest errors. In an out-of-sample test, ranges built from Aug 2020–Jul 2023 covered 81% of outcomes from Aug 2023 onward. Per-category ranges were tested but overfit (62–72% coverage), so every category currently gets the same % width at a given horizon.
 - **Short-horizon forecasts are inherently weak.** Monthly CPI is sticky, and even the best model only modestly beats "no change" at 1–3 months. Forecasts should be presented with that uncertainty.
 
 ---
