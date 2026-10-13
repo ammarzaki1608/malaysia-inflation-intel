@@ -62,6 +62,7 @@ data.gov.my / OpenDOSM
         │  /price-ratio         — price ratio between two states, one category
         │  /trends              — historical CPI/PPI/OPR time series
         │  /category-leaderboard, /state-leaderboard — national/state rankings
+        │  /forecast-accuracy   — live track record of published forecasts
         │  /ask                 — RAG-grounded Q&A (Gemini + FAISS)
         │  /prescriptive-insight — AI-generated general budgeting suggestion
         ▼
@@ -123,6 +124,8 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 - trains on **absolute error**, which is what it is scored on.
 
 Full tables by period and metric: `docs/backtest_report.md`.
+
+**Live track record.** A backtest is still a reconstruction. So every month the pipeline also scores **every forecast it actually published** against the CPI DOSM has released since. It reports error against "no change" and how often the 80% range held, by horizon. Nothing in this scorecard could have been seen when the forecast was made. It's published to `forecasts/scorecard.json` and served at `GET /forecast-accuracy`, and it fills in as published forecasts reach their target months.
 
 **RAG evaluation** (10-question test set): faithfulness 1.00, answer relevancy 0.95, context precision 1.00.
 

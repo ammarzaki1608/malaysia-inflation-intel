@@ -18,6 +18,11 @@ Runs after ingest + dbt in the monthly pipeline job. It:
          because category volatility shifts over time.
   4. Writes one small JSON table of every state x category x month forecast to
      GCS. The API just looks rows up; no model runs at request time.
+  5. Scores every forecast published in earlier months against the actual CPI
+     that has since been released, and publishes forecasts/scorecard.json:
+     a live, out-of-sample track record (error vs "no change", range coverage)
+     that grows every month. Unlike the backtest, nothing here was ever seen by
+     the model or by us when the forecast was made.
 
 Why precompute: the inputs only change once a month, so computing 208 x 12
 forecasts once is cheaper, faster and easier to audit than running models per
@@ -47,6 +52,8 @@ logger = logging.getLogger("forecast_batch")
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "modular-rush-495414-i2")
 GCS_BUCKET = f"{PROJECT_ID}-ml-artifacts"
 GCS_LATEST = "forecasts/latest.json"
+GCS_SCORECARD = "forecasts/scorecard.json"
+SCORE_HORIZONS = (1, 3, 6, 12)
 INTERVAL_LEVEL = 0.80
 QUANTILES = (0.075, 0.925)       # gives ~80% coverage out of sample (see docstring)
 
@@ -145,6 +152,80 @@ def to_payload(table: pd.DataFrame, skill: pd.Series, version: str) -> dict:
     }
 
 
+def score_published(published: list, cpi: pd.DataFrame) -> dict:
+    """
+    Compare previously published forecast payloads with actual CPI.
+
+    For each published base month we keep the newest version (re-runs of the
+    same month replace earlier ones), then match every row whose target month
+    now has real data. Naive = "no change from base_index", the bar to beat.
+    """
+    latest_by_base = {}
+    for p in published:
+        b = p["meta"]["base_date"]
+        if b not in latest_by_base or p["meta"]["version"] > latest_by_base[b]["meta"]["version"]:
+            latest_by_base[b] = p
+
+    actual = cpi.assign(date=cpi["date"].dt.strftime("%Y-%m-%d")) \
+                .set_index(["state", "division", "date"])["cpi_index"]
+    recs = []
+    for b, p in sorted(latest_by_base.items()):
+        for r in p["rows"]:
+            key = (r["state"], r["division"], r["target_date"])
+            if key not in actual.index:
+                continue                    # target month not released yet
+            y, base = float(actual[key]), r["base_index"]
+            recs.append({
+                "base_date": b, "h": r["h"],
+                "err_pp": (r["predicted_index"] - y) / base * 100,
+                "naive_err_pp": (base - y) / base * 100,
+                "inside": r["lower_bound"] <= y <= r["upper_bound"],
+            })
+
+    latest_actual = cpi["date"].max().strftime("%Y-%m-%d")
+    card = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "latest_actual_date": latest_actual,
+        "published_months": sorted(latest_by_base),
+        "scored_forecasts": len(recs),
+        "by_horizon": {},
+        "note": "Out-of-sample: each forecast was published before its target month's CPI existed. "
+                "rel_mae < 1 means more accurate than assuming no change; coverage_80 should be near 0.80.",
+    }
+    if not recs:
+        return card
+    d = pd.DataFrame(recs)
+    for h in SCORE_HORIZONS:
+        x = d[d["h"] == h]
+        if x.empty:
+            continue
+        mae, nmae = x["err_pp"].abs().mean(), x["naive_err_pp"].abs().mean()
+        card["by_horizon"][str(h)] = {
+            "n": int(len(x)),
+            "base_months": int(x["base_date"].nunique()),
+            "mae_pp": round(float(mae), 3),
+            "naive_mae_pp": round(float(nmae), 3),
+            "rel_mae": round(float(mae / nmae), 3) if nmae > 0 else None,
+            "coverage_80": round(float(x["inside"].mean()), 3),
+        }
+    return card
+
+
+def load_published_gcs(project_id: str) -> list:
+    from google.cloud import storage
+    bucket = storage.Client(project=project_id).bucket(f"{project_id}-ml-artifacts")
+    out = []
+    for blob in bucket.list_blobs(prefix="forecasts/forecasts_"):
+        out.append(json.loads(blob.download_as_text()))
+    return out
+
+
+def load_published_dir(path: str) -> list:
+    import glob
+    return [json.load(open(f, encoding="utf-8"))
+            for f in sorted(glob.glob(os.path.join(path, "forecasts_*.json")))]
+
+
 def upload(payload: dict, project_id: str) -> str:
     from google.cloud import storage
     bucket = storage.Client(project=project_id).bucket(f"{project_id}-ml-artifacts")
@@ -166,6 +247,8 @@ def main():
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--calibration-months", type=int, default=36)
     ap.add_argument("--local-out", help="write JSON here instead of uploading to GCS")
+    ap.add_argument("--history-dir", help="offline: folder of earlier forecasts_*.json to score "
+                                          "(default: the versioned files in GCS)")
     a = ap.parse_args()
 
     t0 = time.time()
@@ -192,6 +275,27 @@ def main():
         logger.info(f"Wrote {a.local_out}")
     else:
         upload(payload, a.project)
+
+    # live track record of everything published so far (never blocks publishing)
+    try:
+        published = (load_published_dir(a.history_dir) if a.history_dir
+                     else [] if a.local_out else load_published_gcs(a.project))
+        card = score_published(published, cpi)
+        for h, m in card["by_horizon"].items():
+            logger.info(f"Scorecard h={h}: rel_mae={m['rel_mae']} coverage={m['coverage_80']} "
+                        f"(n={m['n']}, {m['base_months']} published months)")
+        if a.local_out:
+            out = os.path.splitext(a.local_out)[0] + "_scorecard.json"
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(card, f, indent=1)
+            logger.info(f"Wrote {out}")
+        else:
+            from google.cloud import storage
+            storage.Client(project=a.project).bucket(f"{a.project}-ml-artifacts") \
+                .blob(GCS_SCORECARD).upload_from_string(json.dumps(card), content_type="application/json")
+            logger.info(f"Uploaded gs://{a.project}-ml-artifacts/{GCS_SCORECARD}")
+    except Exception as e:
+        logger.warning(f"Scorecard step failed (forecasts were still published): {e}")
     logger.info(f"Done: {len(table):,} forecast rows from {payload['meta']['base_date']} "
                 f"in {time.time() - t0:.0f}s")
 
