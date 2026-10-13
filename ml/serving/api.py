@@ -48,6 +48,8 @@ MODEL_PATH  = os.getenv("MODEL_GCS_PATH", "models/cpi_forecast_20260619_194024.j
 FORECAST_GCS_PATH   = os.getenv("FORECAST_GCS_PATH", "forecasts/latest.json")
 FORECAST_LOCAL_PATH = os.getenv("FORECAST_LOCAL_PATH")      # for local testing only
 FORECAST_REFRESH_S  = int(os.getenv("FORECAST_REFRESH_SECONDS", "3600"))
+SCORECARD_GCS_PATH   = os.getenv("SCORECARD_GCS_PATH", "forecasts/scorecard.json")
+SCORECARD_LOCAL_PATH = os.getenv("SCORECARD_LOCAL_PATH")    # for local testing only
 
 app = FastAPI(
     title="Malaysia Inflation Intelligence API",
@@ -787,6 +789,34 @@ async def state_leaderboard(request: Request, division: str):
 
     results.sort(key=lambda x: x["yoy_change_pct"], reverse=True)
     return {"division": division, "category_name": CATEGORIES.get(division, division), "states": results}
+
+_scorecard = {"data": None, "checked_at": 0.0}
+
+
+@app.get("/forecast-accuracy")
+@limiter.limit("30/minute")
+async def forecast_accuracy(request: Request):
+    """
+    Live, out-of-sample track record of the forecasts actually published:
+    each month's published forecasts scored against the CPI released since.
+    Built by forecast_batch.py; refreshed hourly. Empty until the first
+    published forecasts reach their target months.
+    """
+    if time.time() - _scorecard["checked_at"] > FORECAST_REFRESH_S or _scorecard["data"] is None:
+        _scorecard["checked_at"] = time.time()
+        try:
+            if SCORECARD_LOCAL_PATH:
+                with open(SCORECARD_LOCAL_PATH, encoding="utf-8") as f:
+                    _scorecard["data"] = json.load(f)
+            else:
+                blob = storage.Client(project=PROJECT_ID).bucket(GCS_BUCKET).blob(SCORECARD_GCS_PATH)
+                _scorecard["data"] = json.loads(blob.download_as_text())
+        except Exception as e:
+            logger.warning(f"Scorecard not available: {e}")
+    if _scorecard["data"] is None:
+        raise HTTPException(status_code=404, detail="No scorecard published yet.")
+    return _scorecard["data"]
+
 
 @app.get("/headline-inflation")
 @limiter.limit("30/minute")
