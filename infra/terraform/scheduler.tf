@@ -30,7 +30,7 @@ resource "google_cloud_run_v2_job" "data_pipeline" {
   # CI (.github/workflows/pipeline-image.yml) pins the job to each new image
   # by commit SHA; don't let `terraform apply` revert it to :latest.
   lifecycle {
-    ignore_changes = [template[0].template[0].containers[0].image]
+    ignore_changes = [template[0].template[0].containers[0].image, client, client_version]
   }
 }
 
