@@ -61,6 +61,14 @@ resource "google_cloud_run_v2_service" "api" {
       max_instance_count = 3
     }
   }
+
+  # GitHub Actions deploys with gcloud, which stamps client/client_version and
+  # writes service-level scaling defaults (0). Ignore that noise so `terraform
+  # plan` only shows real changes. Instance limits live in template.scaling,
+  # which Terraform still manages.
+  lifecycle {
+    ignore_changes = [client, client_version, scaling]
+  }
 }
 
 # ── Streamlit app ─────────────────────────────────────────────────────────────
@@ -92,6 +100,14 @@ resource "google_cloud_run_v2_service" "streamlit" {
       min_instance_count = 0
       max_instance_count = 2
     }
+  }
+
+  # GitHub Actions deploys with gcloud, which stamps client/client_version and
+  # writes service-level scaling defaults (0). Ignore that noise so `terraform
+  # plan` only shows real changes. Instance limits live in template.scaling,
+  # which Terraform still manages.
+  lifecycle {
+    ignore_changes = [client, client_version, scaling]
   }
 }
 

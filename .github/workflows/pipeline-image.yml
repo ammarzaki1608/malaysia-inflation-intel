@@ -13,6 +13,12 @@ on:
       - 'ml/training/forecast_batch.py'
   workflow_dispatch:
 
+# Merging several PRs in a row starts several runs; let them finish one at a
+# time (newest last) instead of racing to update the same Cloud Run resource.
+concurrency:
+  group: pipeline-image
+  cancel-in-progress: false
+
 env:
   PROJECT_ID: modular-rush-495414-i2
   REGION: asia-southeast1
