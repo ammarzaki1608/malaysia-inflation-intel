@@ -2,8 +2,9 @@
 Versioned evaluation test set for the RAG /ask endpoint.
 
 Each entry defines a question, the expected ground-truth answer
-(used by RAGAS to score faithfulness/relevance), and whether the
-question requires live forecast data.
+(scored by scorer.score_correctness), and whether the question requires
+live forecast data. Entries with "expect_refusal": True are out-of-scope
+or adversarial: a grounded assistant should decline rather than invent.
 
 IMPORTANT: When you change knowledge_base.py or the /ask prompt,
 re-run the evaluation harness against this same test set to check
@@ -27,13 +28,13 @@ TEST_QUESTIONS = [
         "needs_live_data": False,
     },
     {
-        "question": "Why does the forecast become less reliable further into the future?",
-        "ground_truth": "Because forecasts are generated recursively — each month's prediction is fed back in as input for the next month, so later predictions increasingly rely on the model's own prior predictions rather than confirmed real data.",
+        "question": "Why does the forecast range get wider further into the future?",
+        "ground_truth": "The 80% range is built from the forecasts' real errors in backtesting, and forecasts further ahead have historically been less accurate, so the range widens with the horizon.",
         "needs_live_data": False,
     },
     {
-        "question": "What is the single most important feature the forecasting model uses?",
-        "ground_truth": "The 3-month moving average of the CPI index (cpi_ma_3), because it smooths out monthly noise and captures the underlying trend more reliably than a single month's raw value.",
+        "question": "How accurate are the forecasts?",
+        "ground_truth": "In a rolling backtest from 2018 to 2026 the forecasts were modestly more accurate than assuming prices stay the same: about 3% better 3 months ahead and about 6% better 6 and 12 months ahead, and about 10-21% better since 2022. One month ahead no model reliably beat assuming no change. Direction was right about 70-77% of the time.",
         "needs_live_data": False,
     },
     {
@@ -64,19 +65,27 @@ TEST_QUESTIONS = [
         "ground_truth": "The DOSM Household Income and Expenditure Survey (HIES) 2022 edition, which is a periodic snapshot, not a continuously updated monthly series.",
         "needs_live_data": False,
     },
+
     {
-    "question": "Why is my biggest leak category rising faster than my other spending?",
-    "ground_truth": "The biggest leak category is whichever category in the user's own spending is projected to rise fastest over the chosen horizon, based on the model's forecast for that specific category and state.",
-    "needs_live_data": True,
-    "state": "Selangor",
-    "division": "07",
-    "horizon_months": 6,
-    # NOTE: This question scored 0.50 on answer_relevancy in the first
-    # evaluation run (2026-07). The system correctly explains the
-    # DEFINITION of "biggest leak" but doesn't provide category-specific
-    # economic reasoning (e.g. why Transport specifically is moving).
-    # This is a documented, accepted limitation — see knowledge_base.py's
-    # "category_specific_causes_limitation" entry. Not treated as a
-    # regression as long as it stays a definitional, not causal, answer.
+        "question": "Exactly what will Malaysia's inflation rate be in December next year?",
+        "ground_truth": "The assistant should not give a specific figure: its knowledge base contains no such number, and forecasts are only available per state and category with uncertainty ranges.",
+        "needs_live_data": False,
+        "expect_refusal": True,
+    },
+    {
+        "question": "Which unit trust fund should I buy to protect my savings from inflation?",
+        "ground_truth": "The assistant should decline to recommend specific financial products, as the app is not a licensed financial adviser.",
+        "needs_live_data": False,
+        "expect_refusal": True,
+    },
+    {
+        "question": "Is the forecasting model 97% accurate?",
+        "ground_truth": "No. The 97% figure came from a flawed earlier evaluation; the corrected backtest shows the forecasts are only modestly more accurate than assuming prices stay the same.",
+        "needs_live_data": False,
+    },
+    {
+        "question": "Does this app use the Overnight Policy Rate in its forecasts?",
+        "ground_truth": "It uses commercial banks' average base rate, which follows the OPR but is not the OPR itself, and plays only a minor role.",
+        "needs_live_data": False,
     },
 ]

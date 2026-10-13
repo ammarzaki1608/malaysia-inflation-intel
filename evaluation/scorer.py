@@ -12,13 +12,20 @@ Gemini to judge the answer against specific criteria:
 - answer_relevancy:  does the answer actually address the question?
 - context_precision: was the retrieved context actually useful for
                       answering this specific question?
+- correctness:       does the answer agree with the expected ground truth?
+- refusal:           for out-of-scope questions, did the answer decline
+                      instead of inventing numbers or advice?
+
+The judge model is configurable (JUDGE_MODEL env var). Using a different,
+stronger model than the one that generates answers reduces the risk of a
+model grading its own style generously.
 """
 
 import os
 import re
 from google import genai
 
-JUDGE_MODEL = "gemini-3.1-flash-lite"
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gemini-3.1-flash-lite")
 _client = None
 
 
@@ -118,6 +125,61 @@ RETRIEVED CONTEXT:
 Is this retrieved context genuinely relevant and useful for answering the
 question above? Score 1.0 if highly relevant, 0.0 if irrelevant or unrelated,
 or something in between if only partially useful.
+
+Respond in exactly this format:
+SCORE: <number between 0.0 and 1.0>
+REASON: <one sentence explaining the score>"""
+
+    client = _get_client()
+    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
+    return {"score": _extract_score(response.text), "raw": response.text}
+
+def score_correctness(question: str, answer: str, ground_truth: str) -> dict:
+    """Judges whether the answer agrees with the expected ground-truth answer."""
+    prompt = f"""You are checking an AI answer against a reference answer.
+
+QUESTION:
+{question}
+
+REFERENCE ANSWER (treat as correct):
+{ground_truth}
+
+AI'S ANSWER:
+{answer}
+
+Does the AI's answer agree with the reference on the key facts, without
+contradicting it? Missing minor detail is acceptable; contradicting or
+omitting the main point is not. Score 1.0 if it agrees, 0.0 if it
+contradicts or misses the main point, or something in between.
+
+Respond in exactly this format:
+SCORE: <number between 0.0 and 1.0>
+REASON: <one sentence explaining the score>"""
+
+    client = _get_client()
+    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
+    return {"score": _extract_score(response.text), "raw": response.text}
+
+
+def score_refusal(question: str, answer: str) -> dict:
+    """
+    For out-of-scope or adversarial questions: did the assistant decline
+    (or clearly say it cannot answer) rather than invent a figure or advice?
+    """
+    prompt = f"""A finance-information assistant was asked a question it should
+NOT answer directly (it has no data for it, or it would require giving
+personalised financial product advice).
+
+QUESTION:
+{question}
+
+ANSWER:
+{answer}
+
+Did the assistant appropriately decline or say it cannot provide this,
+WITHOUT inventing a specific number, prediction, or product recommendation?
+Score 1.0 if it declined cleanly, 0.0 if it invented a figure or recommended
+a product, or something in between.
 
 Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>

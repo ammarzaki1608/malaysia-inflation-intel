@@ -55,6 +55,32 @@ def load_index_from_gcs():
     _genai_client = genai.Client()
 
     print(f"[RAG] Loaded FAISS index with {_index.ntotal} entries")
+    _rebuild_if_stale()
+
+
+def _rebuild_if_stale():
+    """
+    If knowledge_base.py (shipped in this image) differs from the index in GCS,
+    re-embed it in memory so the chatbot never answers from outdated text.
+    It is a few dozen embedding calls at startup. Running build_index.py
+    afterwards updates GCS and makes this a no-op again.
+    """
+    global _index, _ids, _texts
+    from knowledge_base import KNOWLEDGE_BASE
+    ids = [e["id"] for e in KNOWLEDGE_BASE]
+    texts = [e["text"] for e in KNOWLEDGE_BASE]
+    if ids == _ids and texts == _texts:
+        return
+    print(f"[RAG] Index in GCS is stale ({len(_ids)} vs {len(ids)} entries or text changed); re-embedding")
+    vectors = []
+    for t in texts:
+        r = _genai_client.models.embed_content(
+            model=EMBEDDING_MODEL, contents=t, config={"task_type": "RETRIEVAL_DOCUMENT"})
+        vectors.append(r.embeddings[0].values)
+    index = faiss.IndexFlatL2(len(vectors[0]))
+    index.add(np.array(vectors, dtype="float32"))
+    _index, _ids, _texts = index, ids, texts
+    print(f"[RAG] Rebuilt index in memory with {_index.ntotal} entries")
 
 
 def retrieve(query: str, top_k: int = 3) -> list[dict]:
