@@ -91,6 +91,7 @@ jobs:
   rag-eval:
     name: Evaluate chatbot answers (post-deploy check)
     runs-on: ubuntu-latest
+    timeout-minutes: 25   # healthy run ~6-8 min; the script itself gives up after 20
     needs: deploy-api
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
