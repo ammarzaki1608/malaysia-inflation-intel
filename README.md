@@ -123,9 +123,9 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 - adds **price stickiness**, **cross-state category trends** and **last year's same-period change** as features;
 - trains on **absolute error**, which is what it is scored on.
 
-Full tables by period and metric: `docs/backtest_report.md`.
-
 **Live track record.** A backtest is still a reconstruction. So every month the pipeline also scores **every forecast it actually published** against the CPI DOSM has released since. It reports error against "no change" and how often the 80% range held, by horizon. Nothing in this scorecard could have been seen when the forecast was made. It's published to `forecasts/scorecard.json` and served at `GET /forecast-accuracy`, and it fills in as published forecasts reach their target months.
+
+Full tables by period and metric: `docs/backtest_report.md`.
 
 **RAG evaluation** (10-question test set): faithfulness 1.00, answer relevancy 0.95, context precision 1.00.
 
