@@ -238,7 +238,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── helper functions ──────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
+# Streamlit's default cache spinner shows "Running fetch_xxx()", which exposes
+# internal function names to users. Show a neutral bilingual message instead.
+LOADING_TEXT = "Loading data… / Memuatkan data…"
+
+@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_price_ratio(origin_state: str, destination_state: str, division: str) -> dict:
     """Deprecated: no longer used (CPI index ratios don't measure relative cost). Kept for reference."""
     try:
@@ -257,7 +261,7 @@ def fetch_price_ratio(origin_state: str, destination_state: str, division: str) 
         return None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecasts(state: str, divisions: tuple, horizon_months: int) -> dict:
     """
     All requested categories for one state in a single API call ({division: result}).
@@ -298,7 +302,7 @@ def forecast_base_index(forecast_list: list) -> float:
     return first.get("base_index") or first["predicted_index"]
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
     """
     Call the FastAPI /forecast endpoint for a 1–12 month forecast
@@ -323,7 +327,7 @@ def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
         st.error(f"API error: {e}")
         return None
     
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_headline_inflation() -> dict:
     """
     Get the current national headline CPI year-on-year change.
@@ -337,7 +341,7 @@ def fetch_headline_inflation() -> dict:
         print(f"[WARNING] fetch_headline_inflation failed: {e}")
         return None
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_trends(state: str, division: str, months_back: int = 60) -> dict:
     """Get raw historical CPI/PPR/OPR time series for charting."""
     try:
@@ -352,7 +356,7 @@ def fetch_trends(state: str, division: str, months_back: int = 60) -> dict:
         print(f"[WARNING] fetch_trends failed: {e}")
         return None
     
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_income_snapshot(state: str) -> dict:
     """Get the HIES 2022 income/expenditure snapshot for one state."""
     try:
@@ -402,7 +406,7 @@ def fetch_prescriptive_insight(context_type: str, summary_data: dict) -> dict:
         print(f"[WARNING] fetch_prescriptive_insight failed: {e}")
         return None
     
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_category_leaderboard() -> dict:
     try:
         response = httpx.get(f"{API_URL}/category-leaderboard", timeout=15.0)
@@ -413,7 +417,7 @@ def fetch_category_leaderboard() -> dict:
         return None
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_state_leaderboard(division: str) -> dict:
     try:
         response = httpx.get(f"{API_URL}/state-leaderboard", params={"division": division}, timeout=15.0)
