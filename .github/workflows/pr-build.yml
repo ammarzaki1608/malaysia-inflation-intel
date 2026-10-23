@@ -22,9 +22,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Run budget tests (standard library only)
+      - name: Run app unit tests (standard library only)
         working-directory: app/streamlit
-        run: python -m unittest -v test_budget
+        run: python -m unittest -v test_budget test_user_profile
 
   build:
     name: Build ${{ matrix.name }}
