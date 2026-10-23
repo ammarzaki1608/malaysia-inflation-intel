@@ -13,6 +13,8 @@ import plotly.express as px
 import pandas as pd
 import os
 
+from budget import rank_pressure, cumulative_extra, salary_check, what_if_savings
+
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
     page_title="Malaysia Inflation Intelligence",
@@ -536,6 +538,24 @@ def render_sidebar() -> tuple:
         step=100,
     )
 
+    # Optional: lets the report answer "is my salary keeping up?" by comparing
+    # the raise with the user's own inflation over the same 12 months.
+    pay_rise_pct = st.sidebar.number_input(
+        "Pay rise in the last 12 months (%)" if lang == "en" else "Kenaikan gaji dalam 12 bulan lalu (%)",
+        min_value=-50.0,
+        max_value=100.0,
+        value=None,
+        step=0.5,
+        format="%.1f",
+        placeholder="e.g. 3" if lang == "en" else "cth. 3",
+        help=(
+            "Optional. Used to check whether your pay kept up with your own cost of living."
+            if lang == "en" else
+            "Pilihan. Digunakan untuk menyemak sama ada gaji anda seiring dengan kos sara hidup anda."
+        ),
+        key="pay_rise_pct",
+    )
+
     st.sidebar.markdown(f"**{t['spending_header']}**")
 
     spending = {}
@@ -577,12 +597,12 @@ def render_sidebar() -> tuple:
     horizon_months = st.sidebar.radio(
         t["horizon_label"],
         options=[3, 6, 12],
-        index=1,
+        index=2,   # 12 months answers "how much more will I need next year?"
         format_func=lambda x: f"{x} months" if lang == "en" else f"{x} bulan",
         horizontal=True,
     )
 
-    return state, spending, monthly_salary, horizon_months, mode, t, lang
+    return state, spending, monthly_salary, pay_rise_pct, horizon_months, mode, t, lang
 
 def render_home(t, lang):
     """Landing page — explains what the app does and how to use it."""
@@ -909,11 +929,23 @@ def calculate_budget_forecast(
     biggest_leak = sorted_by_change[0]
     biggest_saving = sorted_by_change[-1]
 
+    # ── budget pressure in RINGGIT, not percent ─────────────────────────────
+    # A 5% rise on RM50 matters less than 2% on RM900, so pressure is ranked by
+    # the extra RM per month each category adds, and its share of the total.
+    pressure = rank_pressure(category_forecasts)
+
+    # ── total extra over the whole horizon ──────────────────────────────────
+    # Sum of (projected month total - today's total) over months 1..h: the
+    # extra money needed across the period, not just in its final month.
+    cumulative_extra_rm = cumulative_extra(category_forecasts, total_current)
+
     # ── surplus projection ──────────────────────────────────────────────────
     current_surplus = monthly_salary - total_current
     projected_surplus = monthly_salary - total_projected_final_month
 
     return {
+        "pressure": pressure,
+        "cumulative_extra_rm": round(cumulative_extra_rm, 2),
         "category_forecasts": category_forecasts,
         "total_current": round(total_current, 2),
         "total_projected_final": round(total_projected_final_month, 2),
@@ -937,6 +969,140 @@ def calculate_budget_forecast(
 
 # ── personal calculator page ───────────────────────────────────────
 
+def render_budget_answers(result: dict, monthly_salary: int, pay_rise_pct, horizon_months: int, lang: str):
+    """Four cards, one per question a household actually asks."""
+    en = lang == "en"
+    h = horizon_months
+    st.subheader("Your answers at a glance" if en else "Jawapan anda secara ringkas")
+
+    row1 = st.columns(2)
+    row2 = st.columns(2)
+
+    # 1. How much more will I need?
+    with row1[0].container(border=True):
+        extra = result["cumulative_extra_rm"]
+        st.markdown(f"**{'How much more you will need' if en else 'Berapa banyak lagi yang anda perlukan'}**")
+        st.metric(
+            f"Extra over the next {h} months" if en else f"Tambahan dalam {h} bulan akan datang",
+            f"{'+' if extra >= 0 else '-'}RM{abs(extra):,.0f}",
+        )
+        st.caption(
+            f"By month {h} your spending reaches RM{result['total_projected_final']:,.0f} a month "
+            f"(80% range RM{result['total_projected_low']:,.0f}–RM{result['total_projected_high']:,.0f}), "
+            f"from RM{result['total_current']:,.0f} today."
+            if en else
+            f"Menjelang bulan {h}, perbelanjaan anda mencecah RM{result['total_projected_final']:,.0f} sebulan "
+            f"(julat 80% RM{result['total_projected_low']:,.0f}–RM{result['total_projected_high']:,.0f}), "
+            f"berbanding RM{result['total_current']:,.0f} hari ini."
+        )
+
+    # 2. Is my salary keeping up?
+    personal = result.get("personal_past_12m_pct")
+    sc = salary_check(personal, pay_rise_pct, monthly_salary,
+                      result["total_current"], result["total_projected_final"])
+    with row1[1].container(border=True):
+        st.markdown(f"**{'Is your salary keeping up?' if en else 'Adakah gaji anda seiring?'}**")
+        if sc["real_change_pts"] is not None:
+            real = sc["real_change_pts"]
+            st.metric(
+                "Real pay change, last 12 months" if en else "Perubahan gaji benar, 12 bulan lalu",
+                f"{real:+.1f} pts" if en else f"{real:+.1f} mata",
+            )
+            st.caption(
+                f"Your pay rose {pay_rise_pct:+.1f}% while your own costs rose {personal:+.1f}%. "
+                + ("Your pay kept up." if real >= 0 else "Your pay fell behind your cost of living.")
+                if en else
+                f"Gaji anda naik {pay_rise_pct:+.1f}% manakala kos anda sendiri naik {personal:+.1f}%. "
+                + ("Gaji anda seiring." if real >= 0 else "Gaji anda ketinggalan berbanding kos sara hidup.")
+            )
+        elif personal is None:
+            st.caption("Your past 12-month inflation isn't available right now." if en
+                       else "Inflasi 12 bulan lalu anda tidak tersedia buat masa ini.")
+        else:
+            st.caption(
+                "Add your pay rise from the last 12 months in the sidebar to check this."
+                if en else
+                "Masukkan kenaikan gaji 12 bulan lalu di bar sisi untuk menyemak perkara ini."
+            )
+        if sc["needed_raise_rm"] is not None and sc["needed_raise_rm"] > 0:
+            pct_txt = f" ({sc['needed_raise_pct']:.1f}% of your salary)" if en and sc["needed_raise_pct"] is not None else (
+                f" ({sc['needed_raise_pct']:.1f}% daripada gaji anda)" if sc["needed_raise_pct"] is not None else "")
+            st.caption(
+                f"To keep today's monthly leftover, you'd need about RM{sc['needed_raise_rm']:,.0f} more a month by month {h}{pct_txt}."
+                if en else
+                f"Untuk mengekalkan baki bulanan hari ini, anda memerlukan kira-kira RM{sc['needed_raise_rm']:,.0f} lagi sebulan menjelang bulan {h}{pct_txt}."
+            )
+
+    # 3. Which categories put the most pressure on my budget? (ranked by RM)
+    rising = [r for r in result["pressure"] if r["change_rm"] > 0]
+    with row2[0].container(border=True):
+        st.markdown(f"**{'Biggest pressure on your budget' if en else 'Tekanan terbesar pada belanjawan anda'}**")
+        if rising:
+            top = rising[0]
+            st.metric(top["name"], f"+RM{top['change_rm']:,.0f}" + (" a month" if en else " sebulan"))
+            st.caption(
+                f"{top['share_pct']:.0f}% of your total increase by month {h} "
+                f"(spending RM{top['current_rm']:,.0f}, prices {top['change_pct']:+.1f}%)."
+                if en else
+                f"{top['share_pct']:.0f}% daripada jumlah kenaikan anda menjelang bulan {h} "
+                f"(perbelanjaan RM{top['current_rm']:,.0f}, harga {top['change_pct']:+.1f}%)."
+            )
+            if len(rising) > 1:
+                nxt = ", ".join(f"{r['name']} +RM{r['change_rm']:,.0f} ({r['share_pct']:.0f}%)" for r in rising[1:3])
+                st.caption(("Next: " if en else "Seterusnya: ") + nxt)
+        else:
+            st.caption("None of your categories is forecast to cost more." if en
+                       else "Tiada kategori anda dijangka meningkat kosnya.")
+
+    # 4. Where you're least exposed
+    save = result["biggest_saving"]
+    with row2[1].container(border=True):
+        st.markdown(f"**{'Rising slowest' if en else 'Meningkat paling perlahan'}**")
+        st.metric(save["name"], f"{save['change_pct']:+.1f}%")
+        st.caption(
+            f"Price change over the next {h} months. This is where you're least exposed."
+            if en else
+            f"Perubahan harga dalam {h} bulan akan datang. Di sinilah anda paling kurang terdedah."
+        )
+
+
+def render_what_if(result: dict, horizon_months: int, lang: str):
+    """Sliders for the categories adding the most cost; recalculated instantly, no API call."""
+    en = lang == "en"
+    h = horizon_months
+    st.subheader("Try a change" if en else "Cuba satu perubahan")
+    st.caption(
+        "See what spending a little less in your biggest-pressure categories would free up."
+        if en else
+        "Lihat berapa banyak yang dapat dijimatkan jika anda berbelanja sedikit kurang dalam kategori paling menekan."
+    )
+    candidates = [r for r in result["pressure"] if r["current_rm"] > 0][:3]
+    cols = st.columns(len(candidates)) if candidates else []
+    cuts = {}
+    for col, r in zip(cols, candidates):
+        with col:
+            cuts[r["div"]] = st.slider(
+                (f"Spend less on {r['name']}" if en else f"Kurangkan {r['name']}"),
+                min_value=0, max_value=50, value=0, step=5, format="%d%%",
+                key=f"whatif_{r['div']}",
+            )
+    saved = what_if_savings(result["category_forecasts"], cuts)
+    new_leftover = result["projected_surplus"] + saved["monthly_rm"]
+    st.metric(
+        f"Monthly leftover by month {h}" if en else f"Baki bulanan menjelang bulan {h}",
+        f"RM{new_leftover:,.0f}",
+        delta=(f"+RM{saved['monthly_rm']:,.0f}" if saved["monthly_rm"] > 0 else None),
+    )
+    if saved["monthly_rm"] > 0:
+        st.caption(
+            f"About RM{saved['horizon_rm']:,.0f} kept over the next {h} months. Assumes prices follow the forecast; "
+            "spending less means buying less or switching to cheaper options, which only you can judge."
+            if en else
+            f"Kira-kira RM{saved['horizon_rm']:,.0f} dapat disimpan dalam {h} bulan akan datang. Andaian: harga mengikut unjuran; "
+            "berbelanja kurang bermaksud membeli lebih sedikit atau beralih kepada pilihan lebih murah, dan hanya anda yang dapat menilainya."
+        )
+
+
 def render_personal_calculator(
     state: str,
     spending: dict,
@@ -944,6 +1110,7 @@ def render_personal_calculator(
     horizon_months: int,
     t: dict,
     lang: str,
+    pay_rise_pct: float | None = None,
 ):
     st.title(t["budget_forecast_title"])
 
@@ -1104,43 +1271,19 @@ def render_personal_calculator(
 
     st.divider()
 
-    leak = result["biggest_leak"]
-    rising_word = "Rising" if lang == "en" else "Meningkat"
-    watch_text = "watch this category closely." if lang == "en" else "kategori ini wajar dipantau dengan teliti."
-
-    save = result["biggest_saving"]
-    if lang == "en":
-        save_word = "falling" if save["change_pct"] < 0 else "rising slowest"
-        exposed_text = "this is where you're least exposed."
-    else:
-        save_word = "menurun" if save["change_pct"] < 0 else "Meningkat pada kadar paling perlahan"
-        exposed_text = "kategori ini memberikan kesan paling minimum kepada anda."
-
-    st.markdown(f"""
-    <div style='display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:stretch;'>
-        <div style='background:#FEF2F2; border-left:4px solid #dc2626;
-                    border-radius:8px; padding:16px 20px; height:100%;
-                    box-sizing:border-box;'>
-            <b style='color:#991B1B'>{t['biggest_leak_label']}</b><br><br>
-            <b>{leak['name']}</b><br>
-            <span style='color:#7F1D1D'>{rising_word} {leak['change_pct']:+.1f}% {"over" if lang=="en" else "dalam"} {horizon_months} {"months" if lang=="en" else "bulan"} — {watch_text}</span>
-        </div>
-        <div style='background:#F0FDF4; border-left:4px solid #16a34a;
-                    border-radius:8px; padding:16px 20px; height:100%;
-                    box-sizing:border-box;'>
-            <b style='color:#166534'>{t['best_category_label']}</b><br><br>
-            <b>{save['name']}</b><br>
-            <span style='color:#14532D'>{save_word.capitalize()} ({save['change_pct']:+.1f}%) — {exposed_text}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    render_budget_answers(result, monthly_salary, pay_rise_pct, horizon_months, lang)
 
     st.divider()
-    
+
+    render_what_if(result, horizon_months, lang)
+
+    st.divider()
+
     # ── prescriptive insight — auto-generated suggestion ────────────────────
     insight_data = fetch_prescriptive_insight("personal_calculator", {
-        "biggest_leak_name": result["biggest_leak"]["name"],
-        "biggest_leak_pct": result["biggest_leak"]["change_pct"],
+        # the category adding the most RM, which is what pressures the budget
+        "biggest_leak_name": result["pressure"][0]["name"],
+        "biggest_leak_pct": result["pressure"][0]["change_pct"],
         "biggest_saving_name": result["biggest_saving"]["name"],
         "current_surplus": result["current_surplus"],
         "projected_surplus": result["projected_surplus"],
@@ -2123,14 +2266,15 @@ def render_data_explorer(t, lang, state):
 
 # ── main entry point ──────────────────────────────────────────────────────────
 def main():
-    state, spending, monthly_salary, horizon_months, mode, t, lang = render_sidebar()
+    state, spending, monthly_salary, pay_rise_pct, horizon_months, mode, t, lang = render_sidebar()
 
     if mode.startswith("🏠"):
         render_home(t, lang)
     elif mode.startswith("📈"):
         render_data_explorer(t, lang, state)
     elif mode.startswith("📊"):
-        render_personal_calculator(state, spending, monthly_salary, horizon_months, t, lang)
+        render_personal_calculator(state, spending, monthly_salary, horizon_months, t, lang,
+                                   pay_rise_pct=pay_rise_pct)
     else:
         render_relocation_planner(state, spending, monthly_salary, t, lang)
 
