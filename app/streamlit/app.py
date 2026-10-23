@@ -8,19 +8,23 @@ DOSM and BNM data.
 
 import httpx
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+import copy
 import os
 
 from budget import rank_pressure, cumulative_extra, salary_check, what_if_savings
+from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
+                          encode_profile, typical_spending, typical_total)
 
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
     page_title="Malaysia Inflation Intelligence",
     page_icon="🇲🇾",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -492,117 +496,163 @@ def render_forecast_chart(forecast_data: list, category_name: str, base_amount_r
 
     return fig
 
-# ── sidebar — spending profile builder ───────────────────────────────────────
+# ── navigation + household profile (main page, no sidebar) ───────────────────
+# Inputs used to live in the sidebar, which phones hide behind a menu button.
+# Everything now sits on the main page; the profile is kept in session state
+# and mirrored to the URL so a refresh keeps it and a link can be shared.
 
-def render_sidebar() -> tuple:
-    """
-    Renders the sidebar with state selector and spending profile sliders.
-    Returns (state, weights, mode) where mode is 'personal' or 'relocation'.
-    """
-    lang_choice = st.sidebar.radio(
-        "Language / Bahasa",
-        options=["EN", "BM"],
-        horizontal=True,
-        key="lang_toggle",
-    )
+MODE_KEYS = ["mode_home", "mode_explorer", "mode_calculator", "mode_relocation"]
+
+
+def render_top_bar() -> tuple:
+    """Language toggle and page switcher across the top. Returns (mode_index, t, lang)."""
+    col_mode, col_lang = st.columns([5, 1])
+    with col_lang:
+        lang_choice = st.radio(
+            "Language / Bahasa", options=["EN", "BM"], horizontal=True,
+            key="lang_toggle", label_visibility="collapsed",
+        )
     lang = "en" if lang_choice == "EN" else "ms"
     t = LANG[lang]
-
-    st.sidebar.markdown(f"### {t['app_title']}")
-    st.sidebar.caption(t['app_tagline'])
-    st.sidebar.divider()
-
-    # Mode selector
-    mode = st.sidebar.radio(
-        t["mode_label"],
-        options=[t["mode_home"], t["mode_explorer"], t["mode_calculator"], t["mode_relocation"]],
-        key="mode_select",
-    )
-    st.sidebar.divider()
-
-    # State selector
-    state = st.sidebar.selectbox(t["origin_state_label"], options=STATES)
-
-    st.sidebar.divider()
-
-    # ── salary + RM spending inputs (replaces % sliders) ──────────────────────
-    st.sidebar.divider()
-    st.sidebar.subheader(t["budget_header"])
-    st.sidebar.caption(t["budget_caption"])
-
-    monthly_salary = st.sidebar.number_input(
-        t["salary_label"],
-        min_value=0,
-        max_value=50000,
-        value=4500,
-        step=100,
-    )
-
-    # Optional: lets the report answer "is my salary keeping up?" by comparing
-    # the raise with the user's own inflation over the same 12 months.
-    pay_rise_pct = st.sidebar.number_input(
-        "Pay rise in the last 12 months (%)" if lang == "en" else "Kenaikan gaji dalam 12 bulan lalu (%)",
-        min_value=-50.0,
-        max_value=100.0,
-        value=None,
-        step=0.5,
-        format="%.1f",
-        placeholder="e.g. 3" if lang == "en" else "cth. 3",
-        help=(
-            "Optional. Used to check whether your pay kept up with your own cost of living."
-            if lang == "en" else
-            "Pilihan. Digunakan untuk menyemak sama ada gaji anda seiring dengan kos sara hidup anda."
-        ),
-        key="pay_rise_pct",
-    )
-
-    st.sidebar.markdown(f"**{t['spending_header']}**")
-
-    spending = {}
-    total_spent = 0
-
-    default_spending = {
-        "01": 900, "04": 700, "07": 400, "11": 300,
-        "10": 150, "06": 150, "03": 150, "09": 150,
-    }
-
-    # Category names switch language, but the dict KEYS ("01", "04"...)
-    # stay identical — this is what keeps the API calls language-independent
-    category_labels = CATEGORIES if lang == "en" else CATEGORY_NAMES_MS
-
-    for div, name in category_labels.items():
-        default_val = default_spending.get(div, 0)
-        val = st.sidebar.number_input(
-            name,
-            min_value=0,
-            max_value=10000,
-            value=default_val,
-            step=50,
-            key=f"spend_{div}",
+    # The selected page is kept in our own state, not only in the widget:
+    # Streamlit treats a radio whose labels change (EN <-> BM) as a new widget,
+    # which used to send the user back to Home on every language switch.
+    # A shared link opens on the page it was copied from (?page=2 = calculator).
+    if "page" not in st.session_state:
+        try:
+            page = int(st.query_params.get("page", 0))
+        except ValueError:
+            page = 0
+        st.session_state.page = page if 0 <= page < len(MODE_KEYS) else 0
+    with col_mode:
+        mode = st.radio(
+            t["mode_label"], options=list(range(len(MODE_KEYS))),
+            index=st.session_state.page,
+            format_func=lambda i: t[MODE_KEYS[i]], horizontal=True,
+            key=f"mode_select_{lang}", label_visibility="collapsed",
         )
-        spending[div] = val
-        total_spent += val
+    st.session_state.page = mode
+    st.query_params["page"] = str(mode)
+    return mode, t, lang
 
-    unallocated = monthly_salary - total_spent
 
-    st.sidebar.divider()
-    st.sidebar.metric(t["allocated_label"], f"RM{total_spent:,}")
-    st.sidebar.metric(t["unallocated_label"], f"RM{unallocated:,}")
+def get_profile() -> dict:
+    """The household profile, loaded from the URL on a session's first run."""
+    if "profile" not in st.session_state:
+        profile, from_url = decode_profile(dict(st.query_params), STATES, STATES[0])
+        st.session_state.profile = profile
+        st.session_state.profile_from_url = from_url
+    return st.session_state.profile
 
-    if unallocated < 0:
-        st.sidebar.error(t["over_budget_error"].format(amount=abs(unallocated)))
 
-    st.sidebar.divider()
+def save_profile(profile: dict) -> None:
+    st.session_state.profile = profile
+    params = encode_profile(profile)
+    if "pr" not in params and "pr" in st.query_params:
+        del st.query_params["pr"]
+    st.query_params.update(params)   # keeps ?page= alongside the profile
 
-    horizon_months = st.sidebar.radio(
-        t["horizon_label"],
-        options=[3, 6, 12],
-        index=2,   # 12 months answers "how much more will I need next year?"
-        format_func=lambda x: f"{x} months" if lang == "en" else f"{x} bulan",
-        horizontal=True,
+
+def _fill_typical_spending(form_key: str) -> None:
+    """
+    Callback for "Fill with the average for my state": puts the state's HES
+    2024 averages into the spending boxes, without saving or recalculating.
+    The spending widgets are reset so they pick up the new starting values.
+    """
+    state = st.session_state.get(f"{form_key}_state", get_profile()["state"])
+    st.session_state[f"{form_key}_prefill"] = typical_spending(state)
+    st.session_state[f"{form_key}_prefill_state"] = state
+    for div in CATEGORIES:
+        st.session_state.pop(f"{form_key}_spend_{div}", None)
+
+
+def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) -> bool:
+    """
+    State, income, pay rise, horizon and spending in ONE form: nothing reruns
+    while typing, and the report only changes when the user presses submit.
+    Returns True on the run where the form was submitted (profile already saved).
+    """
+    en = lang == "en"
+    p = get_profile()
+    category_labels = CATEGORIES if en else CATEGORY_NAMES_MS
+    prefill = st.session_state.get(f"{form_key}_prefill")
+    start_spending = prefill or p["spending"]
+
+    with st.form(form_key, border=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            state = st.selectbox(t["origin_state_label"], options=STATES,
+                                 index=STATES.index(p["state"]) if p["state"] in STATES else 0,
+                                 key=f"{form_key}_state")
+            income = st.number_input(t["salary_label"], min_value=0, max_value=MAX_INCOME,
+                                     value=int(p["income"]), step=100, key=f"{form_key}_income")
+        with c2:
+            pay_rise = st.number_input(
+                "Pay rise in the last 12 months (%)" if en else "Kenaikan gaji dalam 12 bulan lalu (%)",
+                min_value=-50.0, max_value=100.0, value=p["pay_rise"], step=0.5, format="%.1f",
+                placeholder="Optional, e.g. 3" if en else "Pilihan, cth. 3",
+                help=("Used to check whether your pay kept up with your own cost of living."
+                      if en else "Digunakan untuk menyemak sama ada gaji anda seiring dengan kos sara hidup anda."),
+                key=f"{form_key}_payrise",
+            )
+            horizon = st.radio(t["horizon_label"], options=list(HORIZONS),
+                               index=list(HORIZONS).index(p["horizon"]),
+                               format_func=lambda x: f"{x} months" if en else f"{x} bulan",
+                               horizontal=True, key=f"{form_key}_horizon")
+
+        st.markdown(f"**{t['spending_header']}**")
+        if prefill:
+            pstate = st.session_state.get(f"{form_key}_prefill_state", state)
+            st.caption(
+                f"Filled with the average household in {pstate} (DOSM Household Expenditure Survey 2024). "
+                "That's a whole household, so change each amount to what you really spend, then press the button below."
+                if en else
+                f"Diisi dengan purata isi rumah di {pstate} (Survei Perbelanjaan Isi Rumah DOSM 2024). "
+                "Ini bagi seluruh isi rumah, jadi tukar setiap jumlah kepada perbelanjaan sebenar anda, kemudian tekan butang di bawah."
+            )
+        else:
+            st.caption(
+                "Type what you spend in a normal month, or fill in the average for your state and adjust it. Leave a category at 0 if it doesn't apply."
+                if en else
+                "Masukkan perbelanjaan anda dalam bulan biasa, atau isi purata negeri anda dan laraskan. Biarkan 0 jika kategori tidak berkaitan."
+            )
+        st.form_submit_button(
+            "Fill with the average for my state" if en else "Isi dengan purata negeri saya",
+            on_click=_fill_typical_spending, args=(form_key,),
+        )
+        spend_cols = st.columns(2)
+        spending = {}
+        for i, (div, name) in enumerate(category_labels.items()):
+            with spend_cols[i % 2]:
+                spending[div] = st.number_input(
+                    name, min_value=0, max_value=MAX_CATEGORY, value=int(start_spending.get(div, 0)),
+                    step=50, key=f"{form_key}_spend_{div}",
+                )
+
+        submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
+
+    if submitted:
+        st.session_state.pop(f"{form_key}_prefill", None)
+        st.session_state.pop(f"{form_key}_prefill_state", None)
+        save_profile({"state": state, "income": int(income), "pay_rise": pay_rise,
+                      "horizon": int(horizon), "spending": {d: int(v) for d, v in spending.items()}})
+
+    # summary of what's saved, plus the state's real average as a reference
+    p = get_profile()
+    total = sum(p["spending"].values())
+    left = p["income"] - total
+    avg = typical_total(p["state"])
+    st.caption(
+        f"Saved: RM{total:,} spending of RM{p['income']:,} income, RM{left:,} left each month. "
+        f"For reference, the average household in {p['state']} spends RM{avg:,} a month (DOSM HES 2024)."
+        if en else
+        f"Disimpan: perbelanjaan RM{total:,} daripada pendapatan RM{p['income']:,}, baki RM{left:,} sebulan. "
+        f"Sebagai rujukan, purata isi rumah di {p['state']} berbelanja RM{avg:,} sebulan (HES DOSM 2024)."
     )
+    if left < 0:
+        st.warning(t["over_budget_error"].format(amount=abs(left)))
+    return submitted
 
-    return state, spending, monthly_salary, pay_rise_pct, horizon_months, mode, t, lang
 
 def render_home(t, lang):
     """Landing page — explains what the app does and how to use it."""
@@ -627,10 +677,10 @@ def render_home(t, lang):
         card2_title = "Relocation Planner"
         card2_body = "Thinking of moving to KL, Johor, or another state? We start from how much the average household spends in each state (DOSM HIES 2022), let you adjust every amount, forecast both side by side in ringgit, and estimate the salary you'd need to keep your standard of living."
         card2_best = "Best for: evaluating a job offer in another state."
-        cta_text = "👈 Choose a mode from the sidebar to get started."
+        cta_text = "Choose a page from the menu at the top to get started."
         ready_text = "Ready to find out your personal inflation rate?"
         step1_title = "Pick your mode"
-        step1_body = "Choose Personal Calculator or Relocation Planner from the sidebar on the left."
+        step1_body = "Choose Personal Inflation Calculator or Relocation Planner from the menu at the top."
         step2_title = "Enter your real numbers"
         step2_body = "Type in your monthly salary and how much you actually spend per category in ringgit — no percentages, no guesswork. Pick how far ahead you want to forecast: 3, 6, or 12 months."
         step3_title = "Read your results"
@@ -670,10 +720,10 @@ def render_home(t, lang):
         card2_title = "Perancang Perpindahan"
         card2_body = "Sedang mempertimbangkan untuk berpindah ke Kuala Lumpur, Johor, atau negeri lain? Kami bermula dengan purata perbelanjaan isi rumah di setiap negeri (HIES DOSM 2022), membenarkan anda melaraskan setiap jumlah, memaparkan unjuran perbandingan dalam unit Ringgit, dan menganggarkan gaji yang diperlukan untuk mengekalkan taraf hidup anda."
         card2_best = "Sesuai untuk: Menilai tawaran pekerjaan di negeri lain."
-        cta_text = "👈 Pilih mod daripada bar sisi untuk bermula."
+        cta_text = "Pilih halaman daripada menu di bahagian atas untuk bermula."
         ready_text = "Sedia untuk mengetahui kadar inflasi peribadi anda?"
         step1_title = "Pilih mod anda"
-        step1_body = "Pilih Kalkulator Peribadi atau Perancang Perpindahan daripada bar sisi di sebelah kiri."
+        step1_body = "Pilih Kalkulator Inflasi Peribadi atau Perancang Perpindahan daripada menu di bahagian atas."
         step2_title = "Masukkan angka sebenar anda"
         step2_body = "Masukkan gaji bulanan dan perbelanjaan sebenar anda mengikut kategori dalam unit Ringgit — tiada peratusan atau anggaran diperlukan. Pilih tempoh unjuran yang anda inginkan: 3, 6, atau 12 bulan."
         step3_title = "Semak keputusan anda"
@@ -690,7 +740,7 @@ def render_home(t, lang):
         - Inflasi jangka pendek **hanya boleh diramal secara sederhana** — harga sering kekal sama dari bulan ke bulan. Unjuran disertakan **julat 80%** yang semakin melebar; jadikannya panduan arah dan anggaran saiz, bukan nilai tepat.
         - Perbelanjaan destinasi dalam Perancang Perpindahan **bermula daripada perbezaan purata perbelanjaan isi rumah** antara negeri (HIES 2022). Ini mencerminkan gaya hidup dan pendapatan, bukan harga sahaja, jadi laraskan jumlah mengikut jangkaan anda.
         - Angka pendapatan dan perbelanjaan diambil daripada **Penyiasatan HIES 2022** (Penyiasatan Pendapatan dan Perbelanjaan Isi Rumah) dan mungkin tidak mencerminkan keadaan semasa dengan tepat.
-        "- Angka inflasi rasmi yang dipaparkan untuk tujuan perbandingan diperoleh **secara lansung daripada data CPI kebangsaan rasmi DOSM**, dengan membandingkan data bulan terkini yang diterbitkan dengan bulan yang sama pada tahun sebelumnya."
+        - Angka inflasi rasmi yang dipaparkan untuk tujuan perbandingan diperoleh **secara langsung daripada data CPI kebangsaan rasmi DOSM**, dengan membandingkan data bulan terkini yang diterbitkan dengan bulan yang sama pada tahun sebelumnya.
         - Ini merupakan **projek penyelidikan bebas** — dan tidak mempunyai sebarang kaitan dengan DOSM, BNM, atau mana-mana agensi kerajaan.
         """
 
@@ -1020,9 +1070,9 @@ def render_budget_answers(result: dict, monthly_salary: int, pay_rise_pct, horiz
                        else "Inflasi 12 bulan lalu anda tidak tersedia buat masa ini.")
         else:
             st.caption(
-                "Add your pay rise from the last 12 months in the sidebar to check this."
+                "Add your pay rise from the last 12 months under Your details to check this."
                 if en else
-                "Masukkan kenaikan gaji 12 bulan lalu di bar sisi untuk menyemak perkara ini."
+                "Masukkan kenaikan gaji 12 bulan lalu di bawah Maklumat anda untuk menyemak perkara ini."
             )
         if sc["needed_raise_rm"] is not None and sc["needed_raise_rm"] > 0:
             pct_txt = f" ({sc['needed_raise_pct']:.1f}% of your salary)" if en and sc["needed_raise_pct"] is not None else (
@@ -1103,82 +1153,66 @@ def render_what_if(result: dict, horizon_months: int, lang: str):
         )
 
 
-def render_personal_calculator(
-    state: str,
-    spending: dict,
-    monthly_salary: int,
-    horizon_months: int,
-    t: dict,
-    lang: str,
-    pay_rise_pct: float | None = None,
-):
+def render_personal_calculator(t: dict, lang: str):
     st.title(t["budget_forecast_title"])
+    en = lang == "en"
 
-    total_spent = sum(spending.values())
+    for key, default in (("calculator_generated", False), ("calculator_result", None)):
+        if key not in st.session_state:
+            st.session_state[key] = default
 
-    if total_spent == 0:
-        info_text = "Enter your spending per category in the sidebar to get started." if lang == "en" else "Masukkan perbelanjaan setiap kategori di bar sisi untuk bermula."
-        st.info(info_text)
-        st.stop()
-
-    if monthly_salary > 0 and total_spent > monthly_salary:
-        warn_text = (
-            "Your spending exceeds your salary — the forecast will still run, but check your numbers in the sidebar."
-            if lang == "en" else
-            "Perbelanjaan anda melebihi gaji — ramalan tetap akan dijalankan, tetapi sila semak semula jumlah di bar sisi."
+    with st.expander("Your details" if en else "Maklumat anda",
+                     expanded=not st.session_state.calculator_generated):
+        submitted = render_profile_form(
+            t, lang, "calc_form",
+            "Calculate my forecast" if en else "Kira unjuran saya",
         )
-        st.warning(warn_text)
 
-    generate_label = "🚀 Generate My Forecast" if lang == "en" else "🚀 Jana Ramalan Saya"
-    generate_hint = (
-        "Adjust your salary and spending in the sidebar, then click above to generate your personalised report."
-        if lang == "en" else
-        "Laraskan gaji dan perbelanjaan anda di bar sisi, kemudian klik butang di atas untuk menjana laporan peribadi anda."
-    )
-    changed_hint = (
-        "⚠️ You've changed your inputs — the report below is based on your previous numbers. Click Generate again to refresh it."
-        if lang == "en" else
-        "⚠️ Anda telah menukar input — laporan di bawah adalah berdasarkan angka sebelumnya. Klik Jana semula untuk mengemas kininya."
-    )
+    p = get_profile()
+    state, spending = p["state"], p["spending"]
+    monthly_salary, horizon_months, pay_rise_pct = p["income"], p["horizon"], p["pay_rise"]
 
-    current_inputs_snapshot = (state, monthly_salary, horizon_months, tuple(sorted(spending.items())))
-
-    if "calculator_generated" not in st.session_state:
-        st.session_state.calculator_generated = False
-    if "calculator_last_inputs" not in st.session_state:
-        st.session_state.calculator_last_inputs = None
-    if "calculator_result" not in st.session_state:
-        st.session_state.calculator_result = None
-
-    inputs_changed = (
-        st.session_state.calculator_generated
-        and st.session_state.calculator_last_inputs is not None
-        and st.session_state.calculator_last_inputs != current_inputs_snapshot
-    )
-
-    col_left, col_btn, col_right = st.columns([1, 2, 1])
-    with col_btn:
-        if st.button(generate_label, type="primary", use_container_width=True):
-            st.session_state.calculator_generated = True
-            st.session_state.calculator_last_inputs = current_inputs_snapshot
-            # Force a fresh calculation on this exact click
-            with st.spinner(f"Forecasting {horizon_months} months ahead..." if lang == "en" else f"Meramal {horizon_months} bulan akan datang..."):
-                st.session_state.calculator_result = calculate_budget_forecast(
-                    state, spending, monthly_salary, horizon_months, lang
-                )
-            inputs_changed = False  # freshly regenerated, so no longer stale
+    # Run on submit; straight away when opened from a saved link; and again if
+    # the profile was changed on another page, so the report is never stale.
+    auto_from_link = st.session_state.pop("profile_from_url", False)
+    stale = (st.session_state.calculator_generated
+             and st.session_state.get("calculator_profile") != p)
+    if submitted or stale or (auto_from_link and not st.session_state.calculator_generated):
+        if sum(spending.values()) == 0:
+            st.info("Enter at least one spending amount to get started." if en
+                    else "Masukkan sekurang-kurangnya satu jumlah perbelanjaan untuk bermula.")
+            st.stop()
+        with st.spinner(f"Forecasting {horizon_months} months ahead..." if en
+                        else f"Meramal {horizon_months} bulan akan datang..."):
+            st.session_state.calculator_result = calculate_budget_forecast(
+                state, spending, monthly_salary, horizon_months, lang
+            )
+        st.session_state.calculator_generated = True
+        st.session_state.calculator_profile = copy.deepcopy(p)
+        st.session_state.scroll_to_top = True
+        st.rerun()   # collapse the form and show the report from the top
 
     if not st.session_state.calculator_generated:
-        st.info(generate_hint)
+        st.info("Fill in your details above and press Calculate." if en
+                else "Isikan maklumat anda di atas dan tekan Kira.")
         st.stop()
-
-    if inputs_changed:
-        st.warning(changed_hint)
 
     result = st.session_state.calculator_result
 
+    if st.session_state.pop("scroll_to_top", False):
+        # Calculate sits at the bottom of a long form; without this the report
+        # opens wherever the button was, halfway down the page.
+        # The page has a chat box, so Streamlit's main section sticks to the
+        # bottom on reruns; scroll it back up once the report has rendered.
+        components.html(
+            "<script>const go = () => { const m = window.parent.document.querySelector('section.main');"
+            " if (m) m.scrollTo({top: 0}); };"
+            "[100, 400, 900].forEach(ms => setTimeout(go, ms));</script>",
+            height=0,
+        )
+
     if result is None:
-        st.error("Could not generate a forecast. Please try again." if lang == "en" else "Ramalan tidak dapat dijana. Sila cuba lagi.")
+        st.error("Could not generate a forecast. Please try again." if en else "Ramalan tidak dapat dijana. Sila cuba lagi.")
         st.stop()
 
     latest_date_display = result.get("latest_real_date", "—")
@@ -1189,9 +1223,6 @@ def render_personal_calculator(
         f"Berdasarkan perbelanjaan sebenar anda di {state} · Ramalan {horizon_months} bulan · Data terkini: {latest_date_display}"
     )
     st.caption(caption_text)
-
-    if inputs_changed:
-        st.warning(changed_hint)
 
     # ── Report header — gives the output a clear name and identity ─────────
     report_title = "📄 Your Personal Inflation Report" if lang == "en" else "📄 Laporan Inflasi Peribadi Anda"
@@ -1460,13 +1491,7 @@ def render_personal_calculator(
 
 # ── relocation planner page ───────────────────────────────────────────────────
 
-def render_relocation_planner(
-    origin_state: str,
-    spending: dict,
-    monthly_salary: int,
-    t: dict,
-    lang: str,
-):
+def render_relocation_planner(t: dict, lang: str):
     """
     Relocation Planner — RM-based comparison between two states.
 
@@ -1518,10 +1543,18 @@ def render_relocation_planner(
     st.title(t["relocation_title"])
     st.caption(page_caption)
 
+    with st.expander("Your current home and spending" if lang == "en" else "Negeri dan perbelanjaan semasa anda",
+                     expanded=False):
+        render_profile_form(t, lang, "reloc_form",
+                            "Save my details" if lang == "en" else "Simpan maklumat saya")
+    p = get_profile()
+    origin_state, spending = p["state"], p["spending"]
+
     active_spending = {k: v for k, v in spending.items() if v > 0}
 
     if not active_spending:
-        st.info("Enter your spending in the sidebar to get started.")
+        st.info("Open 'Your current home and spending' above and enter what you spend." if lang == "en"
+                else "Buka 'Negeri dan perbelanjaan semasa anda' di atas dan masukkan perbelanjaan anda.")
         st.stop()
 
     # ── destination state + horizon selectors ───────────────────────────────
@@ -1999,9 +2032,17 @@ def render_relocation_planner(
                 st.plotly_chart(fig, use_container_width=True)
     st.caption(disclaimer_text)
 
-def render_data_explorer(t, lang, state):
+def render_data_explorer(t, lang):
     st.title(t["explorer_title"])
     st.caption(t["explorer_caption"])
+
+    # the state lives in the shared profile, so it carries over to the calculator
+    p = get_profile()
+    state = st.selectbox(t["origin_state_label"], options=STATES,
+                         index=STATES.index(p["state"]) if p["state"] in STATES else 0,
+                         key="explorer_state")
+    if state != p["state"]:
+        save_profile({**p, "state": state})
 
     # ── National overview — the big picture, before drilling down ───────────
     st.subheader(t["national_overview_header"])
@@ -2084,9 +2125,9 @@ def render_data_explorer(t, lang, state):
     st.divider()
 
     st.caption(
-        f"Showing data for **{state}** — change this in the sidebar."
+        f"Showing data for **{state}** — change the state at the top of this page."
         if lang == "en" else
-        f"Menunjukkan data untuk **{state}** — tukar di bar sisi."
+        f"Menunjukkan data untuk **{state}** — tukar negeri di bahagian atas halaman ini."
     )
 
     col_cat, col_range = st.columns(2)
@@ -2266,17 +2307,17 @@ def render_data_explorer(t, lang, state):
 
 # ── main entry point ──────────────────────────────────────────────────────────
 def main():
-    state, spending, monthly_salary, pay_rise_pct, horizon_months, mode, t, lang = render_sidebar()
+    mode, t, lang = render_top_bar()
+    get_profile()   # load any saved profile from the URL on the first run
 
-    if mode.startswith("🏠"):
+    if mode == 0:
         render_home(t, lang)
-    elif mode.startswith("📈"):
-        render_data_explorer(t, lang, state)
-    elif mode.startswith("📊"):
-        render_personal_calculator(state, spending, monthly_salary, horizon_months, t, lang,
-                                   pay_rise_pct=pay_rise_pct)
+    elif mode == 1:
+        render_data_explorer(t, lang)
+    elif mode == 2:
+        render_personal_calculator(t, lang)
     else:
-        render_relocation_planner(state, spending, monthly_salary, t, lang)
+        render_relocation_planner(t, lang)
 
     st.markdown("---")
     footer_text = (
