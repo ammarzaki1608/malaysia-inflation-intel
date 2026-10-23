@@ -17,7 +17,7 @@ import os
 
 from budget import rank_pressure, cumulative_extra, salary_check, what_if_savings
 from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
-                          encode_profile)
+                          encode_profile, typical_spending, typical_total)
 
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
@@ -553,6 +553,19 @@ def save_profile(profile: dict) -> None:
     st.query_params.update(params)   # keeps ?page= alongside the profile
 
 
+def _fill_typical_spending(form_key: str) -> None:
+    """
+    Callback for "Fill with the average for my state": puts the state's HES
+    2024 averages into the spending boxes, without saving or recalculating.
+    The spending widgets are reset so they pick up the new starting values.
+    """
+    state = st.session_state.get(f"{form_key}_state", get_profile()["state"])
+    st.session_state[f"{form_key}_prefill"] = typical_spending(state)
+    st.session_state[f"{form_key}_prefill_state"] = state
+    for div in CATEGORIES:
+        st.session_state.pop(f"{form_key}_spend_{div}", None)
+
+
 def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) -> bool:
     """
     State, income, pay rise, horizon and spending in ONE form: nothing reruns
@@ -562,6 +575,8 @@ def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) ->
     en = lang == "en"
     p = get_profile()
     category_labels = CATEGORIES if en else CATEGORY_NAMES_MS
+    prefill = st.session_state.get(f"{form_key}_prefill")
+    start_spending = prefill or p["spending"]
 
     with st.form(form_key, border=True):
         c1, c2 = st.columns(2)
@@ -586,23 +601,39 @@ def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) ->
                                horizontal=True, key=f"{form_key}_horizon")
 
         st.markdown(f"**{t['spending_header']}**")
-        st.caption(
-            "Start from the example amounts and change them to what you really spend. Leave a category at 0 if it doesn't apply."
-            if en else
-            "Mulakan dengan jumlah contoh dan tukar kepada perbelanjaan sebenar anda. Biarkan 0 jika kategori tidak berkaitan."
+        if prefill:
+            pstate = st.session_state.get(f"{form_key}_prefill_state", state)
+            st.caption(
+                f"Filled with the average household in {pstate} (DOSM Household Expenditure Survey 2024). "
+                "That's a whole household, so change each amount to what you really spend, then press the button below."
+                if en else
+                f"Diisi dengan purata isi rumah di {pstate} (Survei Perbelanjaan Isi Rumah DOSM 2024). "
+                "Ini bagi seluruh isi rumah, jadi tukar setiap jumlah kepada perbelanjaan sebenar anda, kemudian tekan butang di bawah."
+            )
+        else:
+            st.caption(
+                "Type what you spend in a normal month, or fill in the average for your state and adjust it. Leave a category at 0 if it doesn't apply."
+                if en else
+                "Masukkan perbelanjaan anda dalam bulan biasa, atau isi purata negeri anda dan laraskan. Biarkan 0 jika kategori tidak berkaitan."
+            )
+        st.form_submit_button(
+            "Fill with the average for my state" if en else "Isi dengan purata negeri saya",
+            on_click=_fill_typical_spending, args=(form_key,),
         )
         spend_cols = st.columns(2)
         spending = {}
         for i, (div, name) in enumerate(category_labels.items()):
             with spend_cols[i % 2]:
                 spending[div] = st.number_input(
-                    name, min_value=0, max_value=MAX_CATEGORY, value=int(p["spending"].get(div, 0)),
+                    name, min_value=0, max_value=MAX_CATEGORY, value=int(start_spending.get(div, 0)),
                     step=50, key=f"{form_key}_spend_{div}",
                 )
 
         submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
 
     if submitted:
+        st.session_state.pop(f"{form_key}_prefill", None)
+        st.session_state.pop(f"{form_key}_prefill_state", None)
         save_profile({"state": state, "income": int(income), "pay_rise": pay_rise,
                       "horizon": int(horizon), "spending": {d: int(v) for d, v in spending.items()}})
 
@@ -610,19 +641,14 @@ def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) ->
     p = get_profile()
     total = sum(p["spending"].values())
     left = p["income"] - total
-    summary = (
-        f"Saved: RM{total:,} spending of RM{p['income']:,} income, RM{left:,} left each month."
+    avg = typical_total(p["state"])
+    st.caption(
+        f"Saved: RM{total:,} spending of RM{p['income']:,} income, RM{left:,} left each month. "
+        f"For reference, the average household in {p['state']} spends RM{avg:,} a month (DOSM HES 2024)."
         if en else
-        f"Disimpan: perbelanjaan RM{total:,} daripada pendapatan RM{p['income']:,}, baki RM{left:,} sebulan."
+        f"Disimpan: perbelanjaan RM{total:,} daripada pendapatan RM{p['income']:,}, baki RM{left:,} sebulan. "
+        f"Sebagai rujukan, purata isi rumah di {p['state']} berbelanja RM{avg:,} sebulan (HES DOSM 2024)."
     )
-    hies = fetch_income_snapshot(p["state"]) or {}
-    if hies.get("expenditure_mean"):
-        summary += (
-            f" For reference, the average household in {p['state']} spends RM{hies['expenditure_mean']:,.0f} a month (DOSM HIES 2022)."
-            if en else
-            f" Sebagai rujukan, purata isi rumah di {p['state']} berbelanja RM{hies['expenditure_mean']:,.0f} sebulan (HIES DOSM 2022)."
-        )
-    st.caption(summary)
     if left < 0:
         st.warning(t["over_budget_error"].format(amount=abs(left)))
     return submitted

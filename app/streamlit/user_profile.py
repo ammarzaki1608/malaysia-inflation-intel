@@ -10,6 +10,8 @@ URL keys (short on purpose, to keep links readable):
   h  = horizon months   sp  = spending as "01:900,04:700" (division:RM)
 """
 
+from household_spending import HES_2024_MONTHLY_RM, HES_2024_TOTAL_RM
+
 DIVISIONS = ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13"]
 HORIZONS = (3, 6, 12)
 
@@ -21,6 +23,19 @@ EXAMPLE_SPENDING = {
 
 MAX_INCOME = 50_000
 MAX_CATEGORY = 10_000
+
+
+def typical_spending(state: str) -> dict:
+    """
+    The average household's monthly spending per category in a state (DOSM
+    Household Expenditure Survey 2024). Falls back to the Malaysia average.
+    """
+    row = HES_2024_MONTHLY_RM.get(state, HES_2024_MONTHLY_RM["Malaysia"])
+    return {d: int(row.get(d, 0)) for d in DIVISIONS}
+
+
+def typical_total(state: str) -> int:
+    return int(HES_2024_TOTAL_RM.get(state, HES_2024_TOTAL_RM["Malaysia"]))
 
 
 def default_profile(default_state: str) -> dict:

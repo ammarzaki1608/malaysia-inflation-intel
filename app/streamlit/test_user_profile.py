@@ -2,7 +2,8 @@
 
 import unittest
 
-from user_profile import DIVISIONS, decode_profile, default_profile, encode_profile
+from user_profile import (DIVISIONS, decode_profile, default_profile, encode_profile,
+                          typical_spending, typical_total)
 
 STATES = ["Johor", "Pulau Pinang", "Selangor"]
 
@@ -51,6 +52,36 @@ class BadLinks(unittest.TestCase):
         self.assertEqual(p["pay_rise"], 100.0)
         self.assertEqual(p["spending"]["01"], 0)
         self.assertEqual(p["spending"]["04"], 10_000)
+
+
+APP_STATES = [  # must match STATES in app.py
+    "Johor", "Kedah", "Kelantan", "Melaka", "Negeri Sembilan",
+    "Pahang", "Perak", "Perlis", "Pulau Pinang", "Sabah",
+    "Sarawak", "Selangor", "Terengganu",
+    "W.P. Kuala Lumpur", "W.P. Labuan", "W.P. Putrajaya",
+]
+
+
+class TypicalSpending(unittest.TestCase):
+    def test_every_app_state_has_all_13_categories(self):
+        for state in APP_STATES:
+            sp = typical_spending(state)
+            self.assertEqual(sorted(sp), DIVISIONS, state)
+            self.assertTrue(all(v > 0 for v in sp.values()), state)
+
+    def test_categories_add_up_to_the_published_total(self):
+        # DOSM rounds each figure, so allow RM1 per category
+        for state in APP_STATES + ["Malaysia"]:
+            self.assertLessEqual(abs(sum(typical_spending(state).values()) - typical_total(state)), 13, state)
+
+    def test_spot_check_against_the_report(self):
+        # HES 2024 Table 3.1, page 90: Pulau Pinang
+        pp = typical_spending("Pulau Pinang")
+        self.assertEqual((pp["01"], pp["04"], pp["11"]), (680, 1427, 1178))
+        self.assertEqual(typical_total("Pulau Pinang"), 5850)
+
+    def test_unknown_state_falls_back_to_malaysia(self):
+        self.assertEqual(typical_spending("Atlantis"), typical_spending("Malaysia"))
 
 
 if __name__ == "__main__":
