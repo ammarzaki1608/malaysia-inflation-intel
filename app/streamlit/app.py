@@ -248,6 +248,14 @@ st.markdown("""
 # internal function names to users. Show a neutral bilingual message instead.
 LOADING_TEXT = "Loading data… / Memuatkan data…"
 
+# The API stores each chat question and answer (see README, "LLM observability").
+ASK_LOG_NOTICE = {
+    "en": "Questions and answers are stored for up to 90 days to monitor answer quality. "
+          "Please don't include personal details.",
+    "ms": "Soalan dan jawapan disimpan sehingga 90 hari untuk memantau kualiti jawapan. "
+          "Sila jangan sertakan maklumat peribadi.",
+}
+
 @st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecasts(state: str, divisions: tuple, horizon_months: int) -> dict:
     """
@@ -1440,6 +1448,7 @@ def render_personal_calculator(t: dict, lang: str):
         if lang == "en" else
         "Tanya soalan tentang unjuran anda atau aplikasi ini..."
     )
+    st.caption(ASK_LOG_NOTICE[lang])
     question = st.chat_input(ask_placeholder, key="ask_chat_input_pc")
 
     if question:
@@ -1832,6 +1841,7 @@ def render_relocation_planner(t: dict, lang: str):
         if lang == "en" else
         "Tanya soalan tentang perbandingan ini atau aplikasi..."
     )
+    st.caption(ASK_LOG_NOTICE[lang])
     question_reloc = st.chat_input(ask_placeholder_reloc, key="ask_chat_input_reloc")
 
     if question_reloc:

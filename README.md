@@ -321,6 +321,55 @@ All of this runs on every pull request (`.github/workflows/tests.yml`) with the 
 
 ---
 
+## LLM Observability
+
+The evaluation above tests the chatbot on questions I wrote. This is the other half: a record of what happens on real traffic. Every call to Gemini (`/ask` and `/prescriptive-insight`) writes one row to BigQuery, `observability.llm_calls`, and one structured line to Cloud Logging.
+
+| What is recorded | Why |
+|---|---|
+| `retrieval_ms`, `generation_ms`, `total_ms` | Where the time goes: finding context, or the model |
+| `prompt_tokens`, `output_tokens`, `total_tokens` | Cost per answer |
+| `retrieved_ids`, `retrieved_distances` | Which knowledge-base entries were used, and how close the match was |
+| `status`, `error_type`, `error_message`, `finish_reason` | Failures and cut-off answers |
+| `model`, `api_revision`, `forecast_version` | Which deployment produced the answer |
+| `question`, `answer` (`/ask` only) | To read what users actually ask and spot bad answers |
+
+Some design decisions:
+
+- **Logging never breaks an answer.** A failed write is caught and logged; the user still gets their reply. A test covers this.
+- **The row is written before the response is sent.** Cloud Run only gives the container CPU while a request is in flight, so a background write could be lost. The cost is a few tens of milliseconds per answer.
+- **Privacy.** The table is partitioned by day and rows expire after 90 days. `/prescriptive-insight` logs timings and token counts only, never the household figures the user typed. The Cloud Logging line carries no question or answer text. The app tells users that chat questions are stored.
+- **A test keeps the code and the table in step**: every field the API logs must have a column in the Terraform schema.
+- **Gemini failures are now a clean 503** with a "try again" message, where they used to be an unhandled 500. Each one is logged with its error type.
+
+Example queries:
+
+```sql
+-- Daily volume, error rate, latency and tokens
+SELECT DATE(ts) AS day, endpoint,
+       COUNT(*) AS calls,
+       ROUND(COUNTIF(status = 'error') / COUNT(*), 3) AS error_rate,
+       APPROX_QUANTILES(total_ms, 100)[OFFSET(50)] AS p50_ms,
+       APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_ms,
+       SUM(total_tokens) AS tokens
+FROM `observability.llm_calls`
+WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
+GROUP BY day, endpoint
+ORDER BY day DESC;
+
+-- Questions the knowledge base matched poorly (candidates for new entries)
+SELECT ts, question, retrieved_ids[SAFE_OFFSET(0)] AS best_entry,
+       retrieved_distances[SAFE_OFFSET(0)] AS best_distance
+FROM `observability.llm_calls`
+WHERE endpoint = '/ask' AND status = 'ok'
+ORDER BY best_distance DESC
+LIMIT 20;
+```
+
+Not built yet: a dashboard or alert on top of this table, and scoring a sample of real answers with the evaluation judge.
+
+---
+
 ## Deployment
 
 Infrastructure is fully defined in Terraform, including Secret Manager-backed API keys and the automated monthly pipeline. CI/CD via GitHub Actions runs automatically on push to `main` when `ml/serving/` or `app/streamlit/` files change, and dynamically fetches each service's real deployed URL rather than guessing it — self-correcting if Cloud Run's URL format ever changes.
