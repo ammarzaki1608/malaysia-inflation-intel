@@ -323,50 +323,45 @@ All of this runs on every pull request (`.github/workflows/tests.yml`) with the 
 
 ## LLM Observability
 
-The evaluation above tests the chatbot on questions I wrote. This is the other half: a record of what happens on real traffic. Every call to Gemini (`/ask` and `/prescriptive-insight`) writes one row to BigQuery, `observability.llm_calls`, and one structured line to Cloud Logging.
+**What users type into the chat is not stored.** The first version of this logged every call, including users' questions, with a notice in the app. I took that out: a household budgeting app has no good reason to keep what people ask it. The API now records an LLM call only when it comes from my own evaluation run.
 
-| What is recorded | Why |
+How it works: the evaluation workflow sends a secret token in an `X-Eval-Token` header. The API compares it with the token it holds (from Secret Manager). On a match, the call writes one row to BigQuery, `observability.llm_calls`. With no token, a wrong token, or no token configured on the server, nothing is written. Tests cover each of those cases.
+
+| What is recorded (evaluation calls only) | Why |
 |---|---|
 | `retrieval_ms`, `generation_ms`, `total_ms` | Where the time goes: finding context, or the model |
 | `prompt_tokens`, `output_tokens`, `total_tokens` | Cost per answer |
 | `retrieved_ids`, `retrieved_distances` | Which knowledge-base entries were used, and how close the match was |
 | `status`, `error_type`, `error_message`, `finish_reason` | Failures and cut-off answers |
 | `model`, `api_revision`, `forecast_version` | Which deployment produced the answer |
-| `question`, `answer` (`/ask` only) | To read what users actually ask and spot bad answers |
+| `question`, `answer` | The test question and what the chatbot said |
+
+Because every evaluation run asks the same 22 questions, the table shows how latency, token use and retrieval change from one deployment to the next.
 
 Some design decisions:
 
-- **Logging never breaks an answer.** A failed write is caught and logged; the user still gets their reply. A test covers this.
-- **The row is written before the response is sent.** Cloud Run only gives the container CPU while a request is in flight, so a background write could be lost. The cost is a few tens of milliseconds per answer.
-- **Privacy.** The table is partitioned by day and rows expire after 90 days. `/prescriptive-insight` logs timings and token counts only, never the household figures the user typed. The Cloud Logging line carries no question or answer text. The app tells users that chat questions are stored.
+- **Logging never breaks an answer.** A failed write is caught; the reply still goes out.
+- **The row is written before the response is sent.** Cloud Run only gives the container CPU while a request is in flight, so a background write could be lost.
+- **Rows expire after 90 days** (day-partitioned table).
 - **A test keeps the code and the table in step**: every field the API logs must have a column in the Terraform schema.
-- **Gemini failures are now a clean 503** with a "try again" message, where they used to be an unhandled 500. Each one is logged with its error type.
+- **Gemini failures are a clean 503** with a "try again" message, where they used to be an unhandled 500.
 
-Example queries:
+The trade-off: there is no view of real traffic, so a slow or failing day for users shows up only in Cloud Run's own request metrics (status codes and latency, no content). Content-free metrics for real calls would be the next step if that proves too thin.
+
+Example query:
 
 ```sql
--- Daily volume, error rate, latency and tokens
-SELECT DATE(ts) AS day, endpoint,
+-- Latency and tokens per deployment, from evaluation runs
+SELECT api_revision, DATE(MIN(ts)) AS first_seen,
        COUNT(*) AS calls,
-       ROUND(COUNTIF(status = 'error') / COUNT(*), 3) AS error_rate,
+       COUNTIF(status = 'error') AS errors,
        APPROX_QUANTILES(total_ms, 100)[OFFSET(50)] AS p50_ms,
        APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_ms,
-       SUM(total_tokens) AS tokens
+       ROUND(AVG(total_tokens)) AS avg_tokens
 FROM `observability.llm_calls`
-WHERE ts >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY)
-GROUP BY day, endpoint
-ORDER BY day DESC;
-
--- Questions the knowledge base matched poorly (candidates for new entries)
-SELECT ts, question, retrieved_ids[SAFE_OFFSET(0)] AS best_entry,
-       retrieved_distances[SAFE_OFFSET(0)] AS best_distance
-FROM `observability.llm_calls`
-WHERE endpoint = '/ask' AND status = 'ok'
-ORDER BY best_distance DESC
-LIMIT 20;
+GROUP BY api_revision
+ORDER BY first_seen DESC;
 ```
-
-Not built yet: a dashboard or alert on top of this table, and scoring a sample of real answers with the evaluation judge.
 
 ---
 

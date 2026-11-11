@@ -39,6 +39,9 @@ from scorer import (ANSWER_METRICS, JUDGE_MODEL, REFUSAL_METRICS, RETRY_WAITS_S,
 from test_questions import TEST_QUESTIONS
 
 API_URL = os.getenv("API_URL", "http://localhost:8081")
+# Marks these calls as evaluation traffic, so the API logs them (it logs nothing else).
+EVAL_LOG_TOKEN = os.getenv("EVAL_LOG_TOKEN", "")
+ASK_HEADERS = {"X-Eval-Token": EVAL_LOG_TOKEN} if EVAL_LOG_TOKEN else {}
 THRESHOLD = 0.7                                                    # every judge metric's average
 RETRIEVAL_THRESHOLD = float(os.getenv("EVAL_RETRIEVAL_THRESHOLD", "0.8"))   # retrieval hit rate
 PAUSE_S = float(os.getenv("EVAL_PAUSE_SECONDS", "5"))              # stay under Gemini rate limits
@@ -168,7 +171,7 @@ def call_ask_endpoint(question: str, needs_live_data: bool, **kwargs) -> dict:
     last = None
     for wait in RETRY_WAITS_S + [None]:
         try:
-            response = httpx.post(f"{API_URL}/ask", json=payload, timeout=60.0)
+            response = httpx.post(f"{API_URL}/ask", json=payload, headers=ASK_HEADERS, timeout=60.0)
             if response.status_code < 500 and response.status_code != 429:
                 response.raise_for_status()
                 return response.json()

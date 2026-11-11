@@ -59,6 +59,7 @@ def client(monkeypatch):
     monkeypatch.setattr(api, "model", None)
     monkeypatch.setattr(api.limiter, "enabled", False)
     monkeypatch.setattr(api, "LLM_LOG_ENABLED", False)      # never write to BigQuery from tests
+    monkeypatch.setattr(api, "EVAL_LOG_TOKEN", "test-eval-token")
     return TestClient(api.app)
 
 
