@@ -97,7 +97,7 @@ resource "google_cloud_run_v2_service" "streamlit" {
     }
 
     scaling {
-      min_instance_count = 0
+      min_instance_count = 1 # keep one warm so the public link loads without a cold start
       max_instance_count = 2
     }
   }

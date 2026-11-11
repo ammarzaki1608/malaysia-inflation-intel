@@ -8,8 +8,9 @@ If it is unavailable, the API falls back to the legacy recursive XGBoost.
 
 Endpoints:
     GET  /health              — liveness check
-    GET  /forecast             — multi-month recursive CPI forecast
-    GET  /price-ratio          — price ratio between two states for one category
+    GET  /forecast             — 3/6/12-month CPI forecast with 80% range
+    GET  /forecasts            — the same for several categories in one call
+    GET  /price-ratio          — deprecated (kept for backwards compatibility)
     GET  /states               — list of available states
     GET  /categories           — list of CPI categories
 """
@@ -490,7 +491,7 @@ async def forecast(
     horizon_months: int = 6,
 ):
     """
-    Multi-month recursive CPI forecast for one state and category.
+    Multi-month CPI forecast for one state and category.
 
     Example:
         GET /forecast?state=Kedah&division=01&horizon_months=6
@@ -626,7 +627,7 @@ async def trends(
 ):
     """
     Returns a raw historical CPI/PPI/OPR time series for charting - 
-    NOT a forecast, hust the real recorded data over time.
+    NOT a forecast, just the real recorded data over time.
     
     Example:
         GET /trends?state=Selangor&division=01&months_back=60
@@ -635,7 +636,7 @@ async def trends(
         raise HTTPException(status_code=400, detail=f"Unknown state: {state}")
     
     if division not in CATEGORIES:
-        raise HTTPException(status_code=400, detatil=f"Unknown division code: {division}")
+        raise HTTPException(status_code=400, detail=f"Unknown division code: {division}")
     
     if months_back not in (24, 36, 60, 120):
         raise HTTPException(
@@ -676,7 +677,7 @@ async def income_snapshot(request: Request, state: str):
     This is a static survey snapshot, not a monthly time series.
     """
     if state not in STATES:
-        raise HTTPException(status_code=400, detail=f"Unknown sate: {state}")
+        raise HTTPException(status_code=400, detail=f"Unknown state: {state}")
     
     global bq_client
     if bq_client is None:

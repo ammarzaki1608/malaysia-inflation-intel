@@ -30,3 +30,11 @@ data/
 
 # VS Code
 .vscode/
+
+# Logs and local ML artifacts
+logs/
+*.log
+mlflow.db
+mlruns/
+*.faiss
+backtest_results/

@@ -249,25 +249,6 @@ st.markdown("""
 LOADING_TEXT = "Loading data… / Memuatkan data…"
 
 @st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
-def fetch_price_ratio(origin_state: str, destination_state: str, division: str) -> dict:
-    """Deprecated: no longer used (CPI index ratios don't measure relative cost). Kept for reference."""
-    try:
-        response = httpx.get(
-            f"{API_URL}/price-ratio",
-            params={
-                "origin_state": origin_state,
-                "destination_state": destination_state,
-                "division": division,
-            },
-            timeout=15.0,
-        )
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        return None
-
-
-@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecasts(state: str, divisions: tuple, horizon_months: int) -> dict:
     """
     All requested categories for one state in a single API call ({division: result}).
