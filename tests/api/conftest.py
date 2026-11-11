@@ -58,4 +58,13 @@ def client(monkeypatch):
     monkeypatch.setattr(api, "forecast_meta", {})
     monkeypatch.setattr(api, "model", None)
     monkeypatch.setattr(api.limiter, "enabled", False)
+    monkeypatch.setattr(api, "LLM_LOG_ENABLED", False)      # never write to BigQuery from tests
     return TestClient(api.app)
+
+
+@pytest.fixture
+def llm_log(monkeypatch):
+    """Capture the rows log_llm_call would write, instead of writing them."""
+    rows = []
+    monkeypatch.setattr(api, "log_llm_call", rows.append)
+    return rows
