@@ -35,7 +35,7 @@ jobs:
   rag-eval:
     name: Evaluate chatbot answers
     runs-on: ubuntu-latest
-    timeout-minutes: 35   # healthy run ~6-8 min; slow Gemini days ~20+; the script gives up at 30
+    timeout-minutes: 35   # healthy run is a few minutes (one judge call per question); the script gives up at 30
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -107,3 +107,13 @@ jobs:
           pip install -r requirements.txt
           curl -sf "$API_URL/health" > /dev/null   # wake the service before timing-sensitive calls
           python run_eval.py
+
+      # Scores, the judge's reasons and every answer, for reading after the run.
+      # The same summary table is shown on the run's Summary page.
+      - name: Upload evaluation results
+        if: always() && steps.guard.outputs.run == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rag-eval-results
+          path: evaluation/results/
+          if-no-files-found: ignore

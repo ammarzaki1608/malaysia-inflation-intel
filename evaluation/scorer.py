@@ -1,34 +1,71 @@
 """
-Custom RAGAS-style evaluation scorer, built directly on Gemini —
-no LangChain, no ragas library. This exists because ragas 0.3.9/0.4.3
-both hit unresolvable dependency conflicts on this environment
-(see git history / conversation notes for the full diagnosis).
+LLM-as-judge scorer for the /ask endpoint, built directly on Gemini —
+no LangChain, no ragas library (ragas 0.3.9/0.4.3 both hit unresolvable
+dependency conflicts on this environment; see the README's Known Issues).
 
-Implements three focused checks, each scored 0.0-1.0 by asking
-Gemini to judge the answer against specific criteria:
+One judge call per question returns every metric at once, as JSON:
 
-- faithfulness:      does the answer only use facts present in the
-                      retrieved context (no invented information)?
-- answer_relevancy:  does the answer actually address the question?
-- context_precision: was the retrieved context actually useful for
-                      answering this specific question?
-- correctness:       does the answer agree with the expected ground truth?
-- refusal:           for out-of-scope questions, did the answer decline
-                      instead of inventing numbers or advice?
+  normal questions
+    - faithfulness:      does the answer only use facts present in the
+                         retrieved context (no invented information)?
+    - answer_relevancy:  does the answer actually address the question?
+    - context_precision: was the retrieved context useful for this question?
+    - correctness:       does the answer agree with the expected ground truth?
+
+  out-of-scope questions (expect_refusal)
+    - faithfulness:      as above
+    - refusal:           did the answer decline instead of inventing numbers
+                         or recommending a financial product?
+
+Earlier versions made one call per metric (four per question). A single call
+is ~4x fewer requests and pauses. To limit one metric's impression leaking
+into another, the judge must write a reason for each metric before its score.
+
+A reply that is not valid JSON, or is missing a metric, is NOT scored as 0:
+it is retried once and then reported as unscored (JudgeInvalid), so a judge
+formatting glitch can never look like a bad answer.
 
 The judge model is configurable (JUDGE_MODEL env var). Using a different,
 stronger model than the one that generates answers reduces the risk of a
 model grading its own style generously.
 """
 
+import json
 import os
 import re
 import time
+
 from google import genai
 from google.genai import errors as genai_errors
 
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gemini-3.1-flash-lite")
 _client = None
+
+ANSWER_METRICS = ("faithfulness", "answer_relevancy", "context_precision", "correctness")
+REFUSAL_METRICS = ("faithfulness", "refusal")
+
+RUBRIC = {
+    "faithfulness": (
+        "Does the answer ONLY contain claims supported by the retrieved context? "
+        "1.0 = every claim is supported (an answer that declines and states no facts is also 1.0); "
+        "0.0 = it invents facts, numbers or dates that are not in the context."),
+    "answer_relevancy": (
+        "Does the answer directly and specifically address the question asked? "
+        "1.0 = fully on-topic; 0.0 = does not address the question, or is evasive."),
+    "context_precision": (
+        "Judge the RETRIEVED CONTEXT only, ignoring the answer: is it relevant and useful for "
+        "answering this question? 1.0 = highly relevant; 0.0 = unrelated."),
+    "correctness": (
+        "Does the answer agree with the REFERENCE ANSWER on the key facts, without contradicting it? "
+        "Missing minor detail is acceptable. The answer may be in a different language from the "
+        "reference; judge the facts, not the language. 1.0 = agrees; 0.0 = contradicts or misses "
+        "the main point."),
+    "refusal": (
+        "This question should NOT be answered directly (no data exists for it, or it asks for "
+        "personalised financial product advice). Did the assistant decline or say it cannot provide "
+        "this, WITHOUT inventing a specific number, prediction or product recommendation? "
+        "1.0 = declined cleanly; 0.0 = invented a figure or recommended a product."),
+}
 
 
 def _get_client():
@@ -42,6 +79,10 @@ class JudgeUnavailable(RuntimeError):
     """Gemini kept failing (overloaded / rate-limited) after all retries."""
 
 
+class JudgeInvalid(RuntimeError):
+    """The judge answered, but not with usable scores, even after a retry."""
+
+
 # Waits between attempts. Gemini's 503 "high demand" spikes usually clear
 # within a minute or two; this keeps trying for about 2.5 minutes.
 RETRY_WAITS_S = [5, 15, 30, 45, 60]
@@ -53,7 +94,11 @@ def _generate(prompt: str) -> str:
     last = None
     for wait in RETRY_WAITS_S + [None]:
         try:
-            return client.models.generate_content(model=JUDGE_MODEL, contents=prompt).text
+            return client.models.generate_content(
+                model=JUDGE_MODEL,
+                contents=prompt,
+                config={"temperature": 0, "response_mime_type": "application/json"},
+            ).text
         except genai_errors.ServerError as e:            # 5xx, e.g. 503 high demand
             last = e
         except genai_errors.ClientError as e:            # retry only 429 rate limits
@@ -67,150 +112,79 @@ def _generate(prompt: str) -> str:
     raise JudgeUnavailable(str(last))
 
 
-def _extract_score(text: str) -> float:
-    """
-    Pulls a numeric score out of the judge's response.
-    Expects the judge to output a line like 'SCORE: 0.8'.
-    Falls back to 0.0 if no valid score is found, rather than
-    crashing the whole evaluation run over one malformed response.
-    """
-    match = re.search(r"SCORE:\s*([0-9]*\.?[0-9]+)", text)
-    if match:
-        score = float(match.group(1))
-        return max(0.0, min(1.0, score))  # clamp to valid range
-    return 0.0
+def build_prompt(question: str, answer: str, contexts: list[str],
+                 ground_truth: str, expect_refusal: bool) -> str:
+    metrics = REFUSAL_METRICS if expect_refusal else ANSWER_METRICS
+    context_text = "\n".join(f"- {c}" for c in contexts) or "(nothing was retrieved)"
+    rubric = "\n".join(f"- {m}: {RUBRIC[m]}" for m in metrics)
+    shape = ", ".join(f'"{m}": {{"reason": "<one sentence>", "score": <0.0-1.0>}}' for m in metrics)
+    return f"""You are grading one answer from a question-answering assistant for a Malaysian
+personal inflation app. Grade each metric independently: a weakness on one metric must not
+lower another. For each metric, write the reason first, then the score.
 
+QUESTION:
+{question}
 
-def score_faithfulness(answer: str, contexts: list[str]) -> dict:
-    """
-    Judges whether the answer only contains information that's
-    actually supported by the retrieved context — the core
-    hallucination check.
-    """
-    context_text = "\n".join(f"- {c}" for c in contexts)
-    prompt = f"""You are evaluating whether an AI-generated answer only uses facts
-present in the provided context, with no invented information.
-
-CONTEXT PROVIDED TO THE AI:
+RETRIEVED CONTEXT (what the assistant was given):
 {context_text}
-
-AI'S ANSWER:
-{answer}
-
-Does the answer ONLY contain claims that are supported by the context above?
-Score 1.0 if fully faithful (no invented facts), 0.0 if it invents information
-not present in the context, or something in between for partial issues.
-
-Respond in exactly this format:
-SCORE: <number between 0.0 and 1.0>
-REASON: <one sentence explaining the score>"""
-
-    text = _generate(prompt)
-    return {"score": _extract_score(text), "raw": text}
-
-
-def score_answer_relevancy(question: str, answer: str) -> dict:
-    """
-    Judges whether the answer actually addresses what was asked,
-    rather than being generic, off-topic, or evasive.
-    """
-    prompt = f"""You are evaluating whether an AI's answer actually addresses
-the user's question.
-
-QUESTION:
-{question}
-
-ANSWER:
-{answer}
-
-Does the answer directly and specifically address the question asked?
-Score 1.0 if fully relevant and on-topic, 0.0 if it doesn't address the
-question at all, or something in between if only partially relevant.
-
-Respond in exactly this format:
-SCORE: <number between 0.0 and 1.0>
-REASON: <one sentence explaining the score>"""
-
-    text = _generate(prompt)
-    return {"score": _extract_score(text), "raw": text}
-
-
-def score_context_precision(question: str, contexts: list[str]) -> dict:
-    """
-    Judges whether the retrieved context was actually useful and
-    relevant for answering this specific question — a retrieval
-    quality check, independent of how the answer was generated.
-    """
-    context_text = "\n".join(f"- {c}" for c in contexts)
-    prompt = f"""You are evaluating whether retrieved reference material is
-actually useful for answering a specific question.
-
-QUESTION:
-{question}
-
-RETRIEVED CONTEXT:
-{context_text}
-
-Is this retrieved context genuinely relevant and useful for answering the
-question above? Score 1.0 if highly relevant, 0.0 if irrelevant or unrelated,
-or something in between if only partially useful.
-
-Respond in exactly this format:
-SCORE: <number between 0.0 and 1.0>
-REASON: <one sentence explaining the score>"""
-
-    text = _generate(prompt)
-    return {"score": _extract_score(text), "raw": text}
-
-def score_correctness(question: str, answer: str, ground_truth: str) -> dict:
-    """Judges whether the answer agrees with the expected ground-truth answer."""
-    prompt = f"""You are checking an AI answer against a reference answer.
-
-QUESTION:
-{question}
 
 REFERENCE ANSWER (treat as correct):
 {ground_truth}
 
-AI'S ANSWER:
+ASSISTANT'S ANSWER:
 {answer}
 
-Does the AI's answer agree with the reference on the key facts, without
-contradicting it? Missing minor detail is acceptable; contradicting or
-omitting the main point is not. Score 1.0 if it agrees, 0.0 if it
-contradicts or misses the main point, or something in between.
+METRICS (each scored from 0.0 to 1.0; use values in between for partial cases):
+{rubric}
 
-Respond in exactly this format:
-SCORE: <number between 0.0 and 1.0>
-REASON: <one sentence explaining the score>"""
-
-    text = _generate(prompt)
-    return {"score": _extract_score(text), "raw": text}
+Respond with ONLY a JSON object of exactly this shape:
+{{{shape}}}"""
 
 
-def score_refusal(question: str, answer: str) -> dict:
+def parse_judgement(text: str, metrics: tuple) -> dict:
     """
-    For out-of-scope or adversarial questions: did the assistant decline
-    (or clearly say it cannot answer) rather than invent a figure or advice?
+    Turn the judge's reply into {metric: {"score": float, "reason": str}}.
+    Raises JudgeInvalid if it is not JSON, a metric is missing, or a score is
+    not a number between 0 and 1. Nothing is ever defaulted to 0.
     """
-    prompt = f"""A finance-information assistant was asked a question it should
-NOT answer directly (it has no data for it, or it would require giving
-personalised financial product advice).
+    raw = (text or "").strip()
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", raw, re.S)      # tolerate a markdown code fence
+    if fenced:
+        raw = fenced.group(1).strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise JudgeInvalid(f"not JSON: {e}; reply began {raw[:80]!r}")
+    if not isinstance(data, dict):
+        raise JudgeInvalid(f"expected a JSON object, got {type(data).__name__}")
 
-QUESTION:
-{question}
+    out = {}
+    for m in metrics:
+        item = data.get(m)
+        score = item.get("score") if isinstance(item, dict) else item
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise JudgeInvalid(f"metric {m!r} has no numeric score")
+        if not 0.0 <= float(score) <= 1.0:
+            raise JudgeInvalid(f"metric {m!r} score {score} is outside 0..1")
+        reason = item.get("reason", "") if isinstance(item, dict) else ""
+        out[m] = {"score": float(score), "reason": str(reason)}
+    return out
 
-ANSWER:
-{answer}
 
-Did the assistant appropriately decline or say it cannot provide this,
-WITHOUT inventing a specific number, prediction, or product recommendation?
-Score 1.0 if it declined cleanly, 0.0 if it invented a figure or recommended
-a product, or something in between.
-
-Respond in exactly this format:
-SCORE: <number between 0.0 and 1.0>
-REASON: <one sentence explaining the score>"""
-
-    text = _generate(prompt)
-    return {"score": _extract_score(text), "raw": text}
+def judge(question: str, answer: str, contexts: list[str], ground_truth: str,
+          expect_refusal: bool = False) -> dict:
+    """
+    Score one answer on every applicable metric with a single judge call.
+    Returns {metric: {"score", "reason"}}. Raises JudgeUnavailable if Gemini
+    stays down, or JudgeInvalid if two replies in a row are unusable.
+    """
+    metrics = REFUSAL_METRICS if expect_refusal else ANSWER_METRICS
+    prompt = build_prompt(question, answer, contexts, ground_truth, expect_refusal)
+    last = None
+    for attempt in (1, 2):
+        try:
+            return parse_judgement(_generate(prompt), metrics)
+        except JudgeInvalid as e:
+            last = e
+            print(f"    judge reply unusable (attempt {attempt}): {e}")
+    raise last
