@@ -4,9 +4,7 @@ Pulls mart_cpi_features from BigQuery, handles nulls, and creates
 walk-forward cross-validation splits for time series training.
 """
 
-import os
 import logging
-from datetime import datetime
 
 import pandas as pd
 import numpy as np
