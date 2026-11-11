@@ -38,3 +38,6 @@ mlflow.db
 mlruns/
 *.faiss
 backtest_results/
+
+# Chatbot evaluation output (uploaded as a CI artifact instead)
+evaluation/results/

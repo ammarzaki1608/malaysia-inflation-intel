@@ -90,14 +90,22 @@ gemini-3.1-flash-lite  ←── temperature 0.3, strict "never invent facts" sy
 Grounded answer, with retrieved-context IDs returned for traceability
 ```
 
-**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 14-question test set on five metrics:
+**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 22-question test set (17 English, 5 Bahasa Malaysia; 3 out-of-scope) in two layers.
+
+Retrieval, with no LLM involved: each question lists the knowledge-base entries that hold its answer.
+- **hit rate**: was one of them among the entries retrieved?
+- **MRR**: how near the top was it?
+
+Answer quality, with one judge call per question returning all metrics as JSON:
 - **faithfulness**: no facts beyond the retrieved context
 - **answer relevancy**
 - **context precision**
 - **correctness** against the expected answer
 - **refusal**: for out-of-scope questions, such as an exact future inflation figure or a fund recommendation, the bot must decline rather than invent
 
-It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails below a 0.7 threshold. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
+A judge reply that cannot be parsed is retried once and then reported as unscored, never counted as zero; if too few questions are scored (a Gemini outage), the run is reported as incomplete, not as a pass or a fail.
+
+It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails if any judge metric averages below 0.7 or the retrieval hit rate falls below 0.8. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
 
 ---
 
@@ -135,7 +143,7 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 
 Full tables by period and metric: `docs/backtest_report.md`.
 
-**RAG evaluation:** the earlier 10-question run (faithfulness 1.00, relevancy 0.95, precision 1.00) used questions closely matching the knowledge base, with no out-of-scope cases and no correctness check. The expanded 14-question set above replaces it; its results come from the CI run.
+**RAG evaluation:** the earlier 10-question run (faithfulness 1.00, relevancy 0.95, precision 1.00) used questions closely matching the knowledge base, with no out-of-scope cases and no correctness check. The expanded 22-question set above replaces it; its results come from the CI run (the "Evaluate chatbot answers" workflow's Summary page).
 
 ---
 
@@ -201,8 +209,8 @@ malaysia-inflation-intel/
 │       ├── Dockerfile, requirements.txt
 ├── evaluation/
 │   ├── test_questions.py        # versioned RAG evaluation test set
-│   ├── scorer.py                # custom Gemini LLM-as-judge (faithfulness, relevancy, precision, correctness, refusal)
-│   ├── run_eval.py               # runner + CI gate
+│   ├── scorer.py                # custom Gemini LLM-as-judge: one call per question, strict JSON parsing
+│   ├── run_eval.py               # runner: retrieval metrics, judge, results files, CI gate
 │   └── knowledge_base_mirror.py  # mirrors the real knowledge base for scoring context
 ├── app/streamlit/
 │   ├── app.py                   # bilingual UI — all 4 modes
@@ -291,6 +299,7 @@ ruff check .
 ```
 
 - `tests/api/` exercises every API endpoint's validation, the precomputed-forecast lookups, the scorecard and the `/ask` prompt assembly. Retrieval and Gemini are faked, so no key or GCP access is needed.
+- `tests/evaluation/` checks the chatbot evaluation harness itself: judge-reply parsing, retrieval metrics, the pass / fail / incomplete verdict, and that every test question points at a knowledge-base entry that exists.
 - `tests/training/` covers the forecast ranges, the live scorecard arithmetic, the baseline forecasters, the backtest metrics, and the moving-average leak that the original model had.
 - Two slow tests train real models: the **leakage self-test** (multiply all data after the forecast date by 50; no forecast may change) and an end-to-end run of the monthly batch on synthetic data.
 
