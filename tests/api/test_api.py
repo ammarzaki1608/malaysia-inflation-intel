@@ -217,6 +217,10 @@ def test_prescriptive_insight_grounds_prompt_in_report_numbers(client, fake_llm)
 
 # ── LLM observability ────────────────────────────────────────────────────────
 
+# Only calls carrying the evaluation token are logged; conftest sets the token.
+EVAL = {"X-Eval-Token": "test-eval-token"}
+
+
 class _Usage:
     prompt_token_count = 412
     candidates_token_count = 58
@@ -230,7 +234,7 @@ def test_ask_logs_one_row_with_retrieval_latency_and_tokens(client, forecast_tab
     monkeypatch.setattr(api, "_ask_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
 
-    r = client.post("/ask", json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
+    r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
     assert r.status_code == 200
     assert len(llm_log) == 1
     row = llm_log[0]
@@ -254,7 +258,7 @@ def test_ask_returns_503_and_logs_the_error_when_gemini_fails(client, forecast_t
     monkeypatch.setattr(api, "_ask_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
 
-    r = client.post("/ask", json={"question": "What does B40 mean?"})
+    r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 503
     assert r.json()["detail"] == api.LLM_UNAVAILABLE
     assert len(llm_log) == 1
@@ -269,14 +273,14 @@ def test_ask_returns_503_when_retrieval_fails(client, fake_llm, llm_log, monkeyp
     def broken(query, top_k=3):
         raise RuntimeError("embedding service unavailable")
     monkeypatch.setattr(api, "retrieve", broken)
-    r = client.post("/ask", json={"question": "What does B40 mean?"})
+    r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 503
     assert llm_log[0]["status"] == "error" and "retrieved_ids" not in llm_log[0]
     assert fake_llm == []                                     # the model was never called
 
 
 def test_bad_input_is_rejected_before_any_llm_work_and_not_logged(client, forecast_table, fake_llm, llm_log):
-    r = client.post("/ask", json={"question": "Why is my forecast rising?", "state": "Atlantis", "division": "01"})
+    r = client.post("/ask", headers=EVAL, json={"question": "Why is my forecast rising?", "state": "Atlantis", "division": "01"})
     assert r.status_code == 400
     assert llm_log == [] and fake_llm == []
 
@@ -287,7 +291,7 @@ def test_a_failing_log_write_never_breaks_the_answer(client, fake_llm, monkeypat
             raise RuntimeError("BigQuery is down")
     monkeypatch.setattr(api, "LLM_LOG_ENABLED", True)
     monkeypatch.setattr(api, "bq_client", BrokenBigQuery())
-    r = client.post("/ask", json={"question": "What does B40 mean?"})
+    r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 200 and r.json()["answer"] == "A grounded answer."
 
 
@@ -300,7 +304,7 @@ def test_log_row_is_written_to_the_configured_table(client, fake_llm, monkeypatc
             return []
     monkeypatch.setattr(api, "LLM_LOG_ENABLED", True)
     monkeypatch.setattr(api, "bq_client", FakeBigQuery())
-    client.post("/ask", json={"question": "What does B40 mean?"})
+    client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
 
     (table, rows), = written
     assert table == api.LLM_LOG_TABLE and table.endswith(".observability.llm_calls")
@@ -311,7 +315,7 @@ def test_log_row_is_written_to_the_configured_table(client, fake_llm, monkeypatc
 
 
 def test_prescriptive_insight_logs_the_call_but_not_the_users_figures(client, fake_llm, llm_log):
-    r = client.post("/prescriptive-insight", json={
+    r = client.post("/prescriptive-insight", headers=EVAL, json={
         "context_type": "personal_calculator",
         "summary_data": {"biggest_leak_name": "Transport", "current_surplus": 800, "projected_surplus": 650},
     })
@@ -327,9 +331,46 @@ def test_prescriptive_insight_returns_503_when_gemini_fails(client, llm_log, mon
         raise RuntimeError("503 UNAVAILABLE")
     monkeypatch.setattr(api, "_ask_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
-    r = client.post("/prescriptive-insight", json={"context_type": "relocation_planner", "summary_data": {}})
+    r = client.post("/prescriptive-insight", headers=EVAL, json={"context_type": "relocation_planner", "summary_data": {}})
     assert r.status_code == 503
     assert llm_log[0]["status"] == "error"
+
+
+def test_a_users_question_is_never_logged(client, forecast_table, fake_llm, llm_log):
+    """No token, no row: what users type into the chat is not recorded."""
+    r = client.post("/ask", json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
+    assert r.status_code == 200 and r.json()["answer"] == "A grounded answer."
+    assert llm_log == []
+
+
+def test_a_users_insight_request_is_never_logged(client, fake_llm, llm_log):
+    r = client.post("/prescriptive-insight", json={"context_type": "personal_calculator", "summary_data": {}})
+    assert r.status_code == 200
+    assert llm_log == []
+
+
+def test_a_users_failed_call_is_not_logged_either(client, llm_log, monkeypatch):
+    def overloaded(model, contents, config):
+        raise RuntimeError("503 UNAVAILABLE")
+    monkeypatch.setattr(api, "_ask_genai_client",
+                        SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
+    r = client.post("/ask", json={"question": "What does B40 mean?"})
+    assert r.status_code == 503
+    assert llm_log == []
+
+
+def test_a_wrong_token_is_not_logged(client, fake_llm, llm_log):
+    client.post("/ask", headers={"X-Eval-Token": "guess"}, json={"question": "What does B40 mean?"})
+    assert llm_log == []
+
+
+def test_nothing_is_logged_when_the_server_has_no_token(client, fake_llm, llm_log, monkeypatch):
+    """An unset token must not match an empty or missing header."""
+    monkeypatch.setattr(api, "EVAL_LOG_TOKEN", "")
+    client.post("/ask", json={"question": "What does B40 mean?"})
+    client.post("/ask", headers={"X-Eval-Token": ""}, json={"question": "What does B40 mean?"})
+    client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
+    assert llm_log == []
 
 
 def test_every_logged_field_has_a_column_in_the_terraform_table():

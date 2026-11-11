@@ -6,11 +6,48 @@ resource "google_artifact_registry_repository" "main" {
   description   = "Docker images for Malaysia Inflation Intelligence"
 }
 
+# ── Evaluation log token ──────────────────────────────────────────────────────
+# The API logs an LLM call only when the caller sends this token, which only the
+# evaluation workflow has. Copy it into the GitHub secret EVAL_LOG_TOKEN with:
+#   terraform output -raw eval_log_token
+resource "random_password" "eval_log_token" {
+  length  = 40
+  special = false
+}
+
+resource "google_secret_manager_secret" "eval_log_token" {
+  secret_id = "eval-log-token"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "eval_log_token" {
+  secret      = google_secret_manager_secret.eval_log_token.id
+  secret_data = random_password.eval_log_token.result
+}
+
+resource "google_secret_manager_secret_iam_member" "api_eval_log_token" {
+  secret_id = google_secret_manager_secret.eval_log_token.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.vertex.email}"
+}
+
+output "eval_log_token" {
+  value     = random_password.eval_log_token.result
+  sensitive = true
+}
+
 # ── FastAPI prediction service ────────────────────────────────────────────────
 resource "google_cloud_run_v2_service" "api" {
   name                = "inflation-api"
   location            = var.region
   deletion_protection = false
+
+  depends_on = [
+    google_secret_manager_secret_version.eval_log_token,
+    google_secret_manager_secret_iam_member.api_eval_log_token,
+  ]
 
   template {
     service_account = google_service_account.vertex.email
@@ -26,6 +63,17 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "MODEL_GCS_PATH"
         value = "models/cpi_forecast_20260619_194024.joblib"
+      }
+
+      # Calls carrying this token (the evaluation run) are logged; nothing else is.
+      env {
+        name = "EVAL_LOG_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.eval_log_token.secret_id
+            version = "latest"
+          }
+        }
       }
 
       env {

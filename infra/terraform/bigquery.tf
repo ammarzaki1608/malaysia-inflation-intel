@@ -19,20 +19,21 @@ resource "google_bigquery_dataset" "mart" {
   location    = var.region
 }
 
-# Observability — one row per LLM call made by the API (/ask, /prescriptive-insight)
+# Observability — one row per LLM call made by our own evaluation run.
+# Calls from the app's users are never logged (see log_eval_call in api.py).
 resource "google_bigquery_dataset" "observability" {
   dataset_id  = "observability"
-  description = "LLM call logs written by the API: latency, tokens, retrieved context, errors"
+  description = "LLM call logs for evaluation traffic only: latency, tokens, retrieved context, errors"
   location    = var.region
 }
 
 resource "google_bigquery_table" "llm_calls" {
   dataset_id          = google_bigquery_dataset.observability.dataset_id
   table_id            = "llm_calls"
-  description         = "One row per LLM call. Written by ml/serving/api.py log_llm_call."
+  description         = "One row per LLM call made by the evaluation run. Written by ml/serving/api.py log_llm_call."
   deletion_protection = false
 
-  # Questions are free text typed by users, so rows are not kept forever.
+  # Only evaluation questions are stored; old runs are not worth keeping forever.
   time_partitioning {
     type          = "DAY"
     field         = "ts"
@@ -47,7 +48,7 @@ resource "google_bigquery_table" "llm_calls" {
     { name = "model", type = "STRING", mode = "NULLABLE", description = "Generation model" },
     { name = "api_revision", type = "STRING", mode = "NULLABLE", description = "Cloud Run revision that served the call" },
     { name = "forecast_version", type = "STRING", mode = "NULLABLE", description = "Forecast table version loaded at the time" },
-    { name = "question", type = "STRING", mode = "NULLABLE", description = "The user's question (/ask only)" },
+    { name = "question", type = "STRING", mode = "NULLABLE", description = "The evaluation question (/ask only)" },
     { name = "question_chars", type = "INTEGER", mode = "NULLABLE" },
     { name = "state", type = "STRING", mode = "NULLABLE" },
     { name = "division", type = "STRING", mode = "NULLABLE" },

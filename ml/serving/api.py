@@ -16,6 +16,7 @@ Endpoints:
 """
 
 import os
+import hmac
 import json
 import time
 import uuid
@@ -56,6 +57,9 @@ SCORECARD_LOCAL_PATH = os.getenv("SCORECARD_LOCAL_PATH")    # for local testing 
 # One row per LLM call (see log_llm_call). Table is created by Terraform.
 LLM_LOG_TABLE   = os.getenv("LLM_LOG_TABLE", f"{PROJECT_ID}.observability.llm_calls")
 LLM_LOG_ENABLED = os.getenv("LLM_LOG_ENABLED", "true").lower() == "true"
+# Only calls carrying this token (the evaluation run) are logged. Empty = log nothing.
+EVAL_LOG_TOKEN  = os.getenv("EVAL_LOG_TOKEN", "")
+EVAL_TOKEN_HEADER = "x-eval-token"
 API_REVISION    = os.getenv("K_REVISION", "local")           # set by Cloud Run
 
 app = FastAPI(
@@ -926,12 +930,15 @@ def log_llm_call(record: dict) -> None:
     Record one LLM call: what was asked, what was retrieved, how long each stage
     took, how many tokens it used and whether it worked.
 
+    Only ever called for our own evaluation traffic (see log_eval_call), so the
+    question and answer stored here are test questions, never a user's.
+
     Two destinations:
       - a structured log line (metadata only, no question or answer text), so
         latency and errors are visible in Cloud Logging straight away;
       - one row in BigQuery (LLM_LOG_TABLE) including the question and answer,
-        for analysis: slow calls, token spend, weak retrievals, and real
-        questions to grow the evaluation set from. Rows expire after 90 days.
+        for analysis: slow calls, token spend, weak retrievals. Rows expire
+        after 90 days.
 
     It runs before the response is returned, not as a background task: Cloud
     Run throttles CPU once a response has been sent, so work scheduled after it
@@ -963,6 +970,26 @@ def log_llm_call(record: dict) -> None:
         logger.warning(f"LLM log not written ({e.__class__.__name__}: {e})")
 
 
+def is_eval_call(request: Request) -> bool:
+    """True only when the caller sent our evaluation token."""
+    sent = request.headers.get(EVAL_TOKEN_HEADER, "")
+    if not EVAL_LOG_TOKEN or not sent:
+        return False
+    return hmac.compare_digest(sent.encode(), EVAL_LOG_TOKEN.encode())
+
+
+def log_eval_call(request: Request, record: dict) -> None:
+    """
+    Log the call only if it came from our own evaluation run.
+
+    Calls from the app's users are not recorded anywhere: what people type into
+    the chat is theirs. The evaluation harness sends a secret token in the
+    x-eval-token header, and only those calls are written by log_llm_call.
+    """
+    if is_eval_call(request):
+        log_llm_call(record)
+
+
 @app.post("/ask")
 @limiter.limit("15/minute")
 async def ask(request: Request, body: AskRequest):
@@ -971,9 +998,9 @@ async def ask(request: Request, body: AskRequest):
     specific forecast — grounded in retrieved domain knowledge, and in
     live forecast data only when the question actually needs it.
 
-    Every call is recorded by log_llm_call. If retrieval or the model fails
-    (for example Gemini is overloaded), the call is recorded as an error and
-    the client gets a 503 it can retry, not an unexplained 500.
+    Calls from the evaluation run are recorded (log_eval_call); users' calls
+    are not. If retrieval or the model fails (for example Gemini is
+    overloaded), the client gets a 503 it can retry, not an unexplained 500.
     """
     global _ask_genai_client
     if _ask_genai_client is None:
@@ -1065,12 +1092,12 @@ Answer the user's question using only the domain knowledge and forecast data abo
     except Exception as e:
         log.update(status="error", error_type=e.__class__.__name__, error_message=str(e)[:500],
                    total_ms=round((time.perf_counter() - started) * 1000))
-        log_llm_call(log)
+        log_eval_call(request, log)
         logger.error(f"/ask failed: {e.__class__.__name__}: {e}")
         raise HTTPException(status_code=503, detail=LLM_UNAVAILABLE)
 
     log["total_ms"] = round((time.perf_counter() - started) * 1000)
-    log_llm_call(log)
+    log_eval_call(request, log)
 
     return {
         "question": body.question,
@@ -1151,12 +1178,12 @@ Generate a short, general suggestion for someone considering this move."""
     except Exception as e:
         log.update(status="error", error_type=e.__class__.__name__, error_message=str(e)[:500],
                    total_ms=round((time.perf_counter() - started) * 1000))
-        log_llm_call(log)
+        log_eval_call(request, log)
         logger.error(f"/prescriptive-insight failed: {e.__class__.__name__}: {e}")
         raise HTTPException(status_code=503, detail=LLM_UNAVAILABLE)
 
     log["total_ms"] = round((time.perf_counter() - started) * 1000)
-    log_llm_call(log)
+    log_eval_call(request, log)
 
     return {"insight": insight}
 

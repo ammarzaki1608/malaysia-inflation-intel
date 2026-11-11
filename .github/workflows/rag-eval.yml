@@ -39,6 +39,9 @@ jobs:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # optional: marks these calls as evaluation traffic so the API logs them
+      # (timings, tokens, retrieved entries). Without it the run still works.
+      EVAL_LOG_TOKEN: ${{ secrets.EVAL_LOG_TOKEN }}
       # optional: a stronger model than the one answering, to avoid self-grading
       JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'gemini-3.1-flash-lite' }}
 
