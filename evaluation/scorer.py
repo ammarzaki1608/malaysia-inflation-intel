@@ -23,7 +23,9 @@ model grading its own style generously.
 
 import os
 import re
+import time
 from google import genai
+from google.genai import errors as genai_errors
 
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "gemini-3.1-flash-lite")
 _client = None
@@ -34,6 +36,35 @@ def _get_client():
     if _client is None:
         _client = genai.Client()
     return _client
+
+
+class JudgeUnavailable(RuntimeError):
+    """Gemini kept failing (overloaded / rate-limited) after all retries."""
+
+
+# Waits between attempts. Gemini's 503 "high demand" spikes usually clear
+# within a minute or two; this keeps trying for about 2.5 minutes.
+RETRY_WAITS_S = [5, 15, 30, 45, 60]
+
+
+def _generate(prompt: str) -> str:
+    """Call the judge model, retrying on transient server or rate-limit errors."""
+    client = _get_client()
+    last = None
+    for wait in RETRY_WAITS_S + [None]:
+        try:
+            return client.models.generate_content(model=JUDGE_MODEL, contents=prompt).text
+        except genai_errors.ServerError as e:            # 5xx, e.g. 503 high demand
+            last = e
+        except genai_errors.ClientError as e:            # retry only 429 rate limits
+            if getattr(e, "code", None) != 429:
+                raise
+            last = e
+        if wait is None:
+            break
+        print(f"    judge unavailable ({last.__class__.__name__}: {getattr(last, 'code', '?')}), retrying in {wait}s")
+        time.sleep(wait)
+    raise JudgeUnavailable(str(last))
 
 
 def _extract_score(text: str) -> float:
@@ -74,9 +105,8 @@ Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>
 REASON: <one sentence explaining the score>"""
 
-    client = _get_client()
-    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
-    return {"score": _extract_score(response.text), "raw": response.text}
+    text = _generate(prompt)
+    return {"score": _extract_score(text), "raw": text}
 
 
 def score_answer_relevancy(question: str, answer: str) -> dict:
@@ -101,9 +131,8 @@ Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>
 REASON: <one sentence explaining the score>"""
 
-    client = _get_client()
-    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
-    return {"score": _extract_score(response.text), "raw": response.text}
+    text = _generate(prompt)
+    return {"score": _extract_score(text), "raw": text}
 
 
 def score_context_precision(question: str, contexts: list[str]) -> dict:
@@ -130,9 +159,8 @@ Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>
 REASON: <one sentence explaining the score>"""
 
-    client = _get_client()
-    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
-    return {"score": _extract_score(response.text), "raw": response.text}
+    text = _generate(prompt)
+    return {"score": _extract_score(text), "raw": text}
 
 def score_correctness(question: str, answer: str, ground_truth: str) -> dict:
     """Judges whether the answer agrees with the expected ground-truth answer."""
@@ -156,9 +184,8 @@ Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>
 REASON: <one sentence explaining the score>"""
 
-    client = _get_client()
-    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
-    return {"score": _extract_score(response.text), "raw": response.text}
+    text = _generate(prompt)
+    return {"score": _extract_score(text), "raw": text}
 
 
 def score_refusal(question: str, answer: str) -> dict:
@@ -185,6 +212,5 @@ Respond in exactly this format:
 SCORE: <number between 0.0 and 1.0>
 REASON: <one sentence explaining the score>"""
 
-    client = _get_client()
-    response = client.models.generate_content(model=JUDGE_MODEL, contents=prompt)
-    return {"score": _extract_score(response.text), "raw": response.text}
+    text = _generate(prompt)
+    return {"score": _extract_score(text), "raw": text}

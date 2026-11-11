@@ -1,0 +1,17 @@
+# Streamlit settings for the deployed app.
+# Streamlit reads ./.streamlit/config.toml from the working directory (/app).
+
+[server]
+port = 8080
+headless = true
+enableCORS = false
+
+[browser]
+gatherUsageStats = false
+
+# Always render in light mode. The app's cards and banners use fixed light
+# backgrounds, so following a phone's dark-mode setting made Streamlit switch
+# text to white on those light cards (unreadable). Pinning the theme here
+# makes light the default for every visitor, whatever their OS setting.
+[theme]
+base = "light"

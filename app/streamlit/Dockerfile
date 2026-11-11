@@ -7,12 +7,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY app.py .
+COPY app.py budget.py user_profile.py household_spending.py ./
 
-# Streamlit config — disable telemetry and set port
-RUN mkdir -p ~/.streamlit
-RUN echo '[server]\nport = 8080\nheadless = true\nenableCORS = false\n\n[browser]\ngatherUsageStats = false' \
-    > ~/.streamlit/config.toml
+# Streamlit config (port, telemetry off, light theme) — see .streamlit/config.toml
+COPY .streamlit/ ./.streamlit/
 
 EXPOSE 8080
 
