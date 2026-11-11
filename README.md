@@ -143,7 +143,21 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 
 Full tables by period and metric: `docs/backtest_report.md`.
 
-**RAG evaluation:** the earlier 10-question run (faithfulness 1.00, relevancy 0.95, precision 1.00) used questions closely matching the knowledge base, with no out-of-scope cases and no correctness check. The expanded 22-question set above replaces it; its results come from the CI run (the "Evaluate chatbot answers" workflow's Summary page).
+**RAG evaluation** (22 questions against the live API, 11 Nov 2026; every question was judged):
+
+| Metric | Score | Questions |
+|---|---:|---:|
+| Retrieval hit rate (no LLM) | 1.00 | 19 |
+| Retrieval MRR (no LLM) | 0.94 | 19 |
+| Faithfulness | 1.00 | 22 |
+| Answer relevancy | 1.00 | 19 |
+| Context precision | 1.00 | 19 |
+| Correctness | 0.99 | 19 |
+| Refusal (out-of-scope questions) | 1.00 | 3 |
+
+Correctness was 0.99 in English (15 questions) and 1.00 in Bahasa Malaysia (4).
+
+How to read this: the two retrieval rows are exact counts and the most trustworthy. The judge-scored rows are near their ceiling, which says as much about the test as about the chatbot: the knowledge base is small (27 entries), the questions map closely onto it, and the judge was the same model family that wrote the answers. They work as a regression gate (a broken prompt or stale knowledge base would show up) more than as a measure of how good the chatbot is. Harder questions and a stronger, different judge model are the next step. The latest numbers are on the "Evaluate chatbot answers" workflow's Summary page.
 
 ---
 
