@@ -281,6 +281,23 @@ python run_eval.py
 
 ---
 
+## Tests
+
+```bash
+pip install pytest ruff
+pytest -m "not slow"      # API + forecasting unit tests, a few seconds
+pytest                    # also trains real models on synthetic data (~2 min)
+ruff check .
+```
+
+- `tests/api/` exercises every API endpoint's validation, the precomputed-forecast lookups, the scorecard and the `/ask` prompt assembly. Retrieval and Gemini are faked, so no key or GCP access is needed.
+- `tests/training/` covers the forecast ranges, the live scorecard arithmetic, the baseline forecasters, the backtest metrics, and the moving-average leak that the original model had.
+- Two slow tests train real models: the **leakage self-test** (multiply all data after the forecast date by 50; no forecast may change) and an end-to-end run of the monthly batch on synthetic data.
+
+All of this runs on every pull request (`.github/workflows/tests.yml`) with the same pinned requirements as the production images.
+
+---
+
 ## Deployment
 
 Infrastructure is fully defined in Terraform, including Secret Manager-backed API keys and the automated monthly pipeline. CI/CD via GitHub Actions runs automatically on push to `main` when `ml/serving/` or `app/streamlit/` files change, and dynamically fetches each service's real deployed URL rather than guessing it — self-correcting if Cloud Run's URL format ever changes.

@@ -33,7 +33,7 @@ from prophet import Prophet
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from google.cloud import storage
 
-from prepare_features import prepare, get_feature_columns, PROJECT_ID
+from prepare_features import prepare, PROJECT_ID
 
 logging.basicConfig(
     level=logging.INFO,

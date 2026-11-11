@@ -1,0 +1,26 @@
+# Tooling config only (this repo is not an installable package).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: trains real models on synthetic data (about a minute each); skip with -m 'not slow'",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff]
+exclude = ["venv", ".terraform", "transform/dbt_project/target", "transform/dbt_project/dbt_packages"]
+line-length = 120
+
+[tool.ruff.lint]
+# Real errors only: syntax errors (E9) and pyflakes (F: undefined names, unused
+# imports and variables). Style rules are deliberately not enforced yet.
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Existing unused names in deployed files. Left as they are so that adding the
+# linter does not trigger a redeploy; remove each entry the next time its file changes.
+"app/streamlit/app.py" = ["F401", "F841"]
+"ml/serving/api.py" = ["F401"]
+"ml/training/backtest.py" = ["F841"]
