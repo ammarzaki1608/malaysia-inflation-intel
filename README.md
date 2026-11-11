@@ -58,8 +58,7 @@ data.gov.my / OpenDOSM
         │                                (ingest.py → dbt run → dbt test → forecast_batch.py)
         ▼
 [ml/serving/api.py]  ←── FastAPI, forecast table + FAISS index loaded from GCS (table re-checked hourly)
-        │  /forecast            — 1–12 month CPI forecast with 80% range
-        │  /price-ratio         — price ratio between two states, one category
+        │  /forecast, /forecasts — 3/6/12-month CPI forecast with 80% range (one or many categories)
         │  /trends              — historical CPI/PPI/OPR time series
         │  /category-leaderboard, /state-leaderboard — national/state rankings
         │  /forecast-accuracy   — live track record of published forecasts
@@ -115,7 +114,7 @@ Forecasts are evaluated with a **rolling-origin backtest** (`ml/training/backtes
 | ETS per series | 1.06 | 1.01 | 0.99 | 0.96 |
 | **XGBoost, direct growth model** | 1.04 | 0.97 | 0.95 | 0.99 |
 | **ETS + XGBoost average** | 1.03 | **0.97** | **0.94** | **0.94** |
-| XGBoost, original design (currently deployed) | 2.23 | 1.37 | 1.22 | 1.11 |
+| XGBoost, original design (replaced) | 2.23 | 1.37 | 1.22 | 1.11 |
 
 Since 2022, the ETS + XGBoost average is 10–21% more accurate than naive (0.97 / 0.90 / 0.86 / 0.79). It also gets the direction of price change right 70–77% of the time. No model reliably beats naive one month ahead: about 40% of month-to-month category changes are exactly zero.
 
@@ -146,7 +145,7 @@ Full tables by period and metric: `docs/backtest_report.md`.
 | Storage | Google Cloud Storage (GCS), BigQuery, Secret Manager |
 | Ingestion | Python, pandas, requests, google-cloud-bigquery |
 | Transformation | dbt, SQL (BigQuery dialect) |
-| ML Training | XGBoost, Prophet, scikit-learn, SHAP, MLflow |
+| ML Training | XGBoost, statsforecast (AutoETS), scikit-learn (Prophet, SHAP and MLflow only in the legacy `train.py`) |
 | GenAI / RAG | Gemini API (gemini-embedding-001, gemini-3.1-flash-lite), FAISS |
 | Serving | FastAPI, uvicorn, joblib, slowapi (rate limiting) |
 | Frontend | Streamlit (bilingual EN/BM), Plotly |
@@ -182,12 +181,15 @@ malaysia-inflation-intel/
 │   └── scheduler.tf            # Cloud Run Job + Cloud Scheduler (monthly pipeline)
 ├── ingestion/
 │   ├── ingest.py, config.py, requirements.txt
-│   ├── run_pipeline.sh         # ingest → dbt run → dbt test, for the scheduled Job
+│   ├── run_pipeline.sh         # ingest → dbt run → dbt test → forecast_batch, for the scheduled Job
 │   └── Dockerfile
 ├── transform/dbt_project/
 │   └── models/{staging,mart}/
 ├── ml/
-│   ├── training/                # prepare_features.py, train.py
+│   ├── training/
+│   │   ├── backtest.py          # rolling-origin backtest, models, leakage self-test
+│   │   ├── forecast_batch.py    # monthly: train, calibrate ranges, publish forecasts + scorecard
+│   │   └── prepare_features.py, train.py   # legacy recursive model (API fallback only)
 │   └── serving/
 │       ├── api.py               # FastAPI — forecast, RAG, leaderboard endpoints
 │       ├── rag/
@@ -197,7 +199,7 @@ malaysia-inflation-intel/
 │       ├── Dockerfile, requirements.txt
 ├── evaluation/
 │   ├── test_questions.py        # versioned RAG evaluation test set
-│   ├── scorer.py                # custom Gemini LLM-as-judge (faithfulness, relevancy, precision)
+│   ├── scorer.py                # custom Gemini LLM-as-judge (faithfulness, relevancy, precision, correctness, refusal)
 │   ├── run_eval.py               # runner + CI gate
 │   └── knowledge_base_mirror.py  # mirrors the real knowledge base for scoring context
 ├── app/streamlit/
@@ -205,7 +207,9 @@ malaysia-inflation-intel/
 │   ├── Dockerfile, requirements.txt
 └── .github/workflows/
     ├── terraform.yml             # validate Terraform on every PR
-    └── deploy.yml                # build + push + self-correcting deploy on merge to main
+    ├── pr-build.yml              # build + smoke-test all three images on every PR
+    ├── pipeline-image.yml        # build + push the monthly pipeline image
+    └── deploy.yml                # build + push + deploy on merge to main, then RAG evaluation
 ```
 
 ---
@@ -324,7 +328,7 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 
 ## Roadmap
 
-- LangGraph-based budget advisor agent (tool-calling across `/forecast`, `/price-ratio`, `/ask`)
+- LangGraph-based budget advisor agent (tool-calling across `/forecasts`, `/trends`, `/ask`)
 - LLM observability — logging retrieved context, prompts, and latency per `/ask` call to BigQuery
 - Automated model retraining gate — compare newly retrained models against the deployed one before promotion
 - Prediction logging for real-world drift monitoring
@@ -340,3 +344,5 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 ---
 
 *Data sourced from [data.gov.my](https://data.gov.my) and [OpenDOSM](https://open.dosm.gov.my). Published under the terms of the Malaysian Open Data initiative.*
+
+Code licensed under the [MIT License](LICENSE).

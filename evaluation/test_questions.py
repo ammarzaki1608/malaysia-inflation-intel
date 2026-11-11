@@ -14,7 +14,7 @@ for regressions before considering the change "done."
 TEST_QUESTIONS = [
     {
         "question": "How does the relocation planner suggest destination spending?",
-        "ground_truth": "It scales the user's current spending by the current price ratio between the origin and destination states, based on real DOSM CPI index values.",
+        "ground_truth": "It starts from the user's current spending, scaled by the difference in average monthly household spending between the two states from DOSM's Household Income and Expenditure Survey (HIES) 2022. The suggested amounts are a starting point the user can edit.",
         "needs_live_data": False,
     },
     {
