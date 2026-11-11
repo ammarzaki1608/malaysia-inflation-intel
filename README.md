@@ -416,7 +416,7 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 ## Roadmap
 
 - LangGraph-based budget advisor agent (tool-calling across `/forecasts`, `/trends`, `/ask`)
-- LLM observability — logging retrieved context, prompts, and latency per `/ask` call to BigQuery
+- Content-free latency and error metrics for real chat traffic (evaluation calls are already logged)
 - Automated model retraining gate — compare newly retrained models against the deployed one before promotion
 - Prediction logging for real-world drift monitoring
 - District-level cost-of-living integration (DOSM PAKW dataset)
