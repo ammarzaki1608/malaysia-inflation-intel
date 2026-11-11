@@ -18,6 +18,8 @@ Endpoints:
 import os
 import json
 import time
+import uuid
+from datetime import datetime, timezone
 import logging
 import tempfile
 import joblib
@@ -51,6 +53,10 @@ FORECAST_LOCAL_PATH = os.getenv("FORECAST_LOCAL_PATH")      # for local testing 
 FORECAST_REFRESH_S  = int(os.getenv("FORECAST_REFRESH_SECONDS", "3600"))
 SCORECARD_GCS_PATH   = os.getenv("SCORECARD_GCS_PATH", "forecasts/scorecard.json")
 SCORECARD_LOCAL_PATH = os.getenv("SCORECARD_LOCAL_PATH")    # for local testing only
+# One row per LLM call (see log_llm_call). Table is created by Terraform.
+LLM_LOG_TABLE   = os.getenv("LLM_LOG_TABLE", f"{PROJECT_ID}.observability.llm_calls")
+LLM_LOG_ENABLED = os.getenv("LLM_LOG_ENABLED", "true").lower() == "true"
+API_REVISION    = os.getenv("K_REVISION", "local")           # set by Cloud Run
 
 app = FastAPI(
     title="Malaysia Inflation Intelligence API",
@@ -890,6 +896,73 @@ def _needs_live_forecast(question: str) -> bool:
     return any(signal in q for signal in PERSONAL_QUESTION_SIGNALS)
 
 
+# ── LLM observability ────────────────────────────────────────────────────────
+
+LLM_UNAVAILABLE = "The assistant is temporarily unavailable. Please try again in a moment."
+
+
+def _token_usage(response) -> dict:
+    """Token counts from a Gemini response; empty if the SDK did not report them."""
+    usage = getattr(response, "usage_metadata", None)
+    if usage is None:
+        return {}
+    return {
+        "prompt_tokens": getattr(usage, "prompt_token_count", None),
+        "output_tokens": getattr(usage, "candidates_token_count", None),
+        "total_tokens": getattr(usage, "total_token_count", None),
+    }
+
+
+def _finish_reason(response):
+    try:
+        reason = response.candidates[0].finish_reason
+        return getattr(reason, "name", None) or (str(reason) if reason is not None else None)
+    except Exception:
+        return None
+
+
+def log_llm_call(record: dict) -> None:
+    """
+    Record one LLM call: what was asked, what was retrieved, how long each stage
+    took, how many tokens it used and whether it worked.
+
+    Two destinations:
+      - a structured log line (metadata only, no question or answer text), so
+        latency and errors are visible in Cloud Logging straight away;
+      - one row in BigQuery (LLM_LOG_TABLE) including the question and answer,
+        for analysis: slow calls, token spend, weak retrievals, and real
+        questions to grow the evaluation set from. Rows expire after 90 days.
+
+    It runs before the response is returned, not as a background task: Cloud
+    Run throttles CPU once a response has been sent, so work scheduled after it
+    may never finish. It must never break the request, so every failure here
+    is logged and swallowed.
+    """
+    row = {
+        "call_id": uuid.uuid4().hex,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "api_revision": API_REVISION,
+        **record,
+    }
+    try:
+        meta = {k: v for k, v in row.items() if k not in ("question", "answer")}
+        logger.info("llm_call " + json.dumps(meta, default=str))
+    except Exception as e:                                   # pragma: no cover - defensive
+        logger.warning(f"Could not write llm_call log line: {e}")
+
+    if not LLM_LOG_ENABLED:
+        return
+    try:
+        global bq_client
+        if bq_client is None:
+            bq_client = bigquery.Client(project=PROJECT_ID)
+        errors = bq_client.insert_rows_json(LLM_LOG_TABLE, [row], timeout=5)
+        if errors:
+            logger.warning(f"LLM log row rejected by BigQuery: {errors}")
+    except Exception as e:
+        logger.warning(f"LLM log not written ({e.__class__.__name__}: {e})")
+
+
 @app.post("/ask")
 @limiter.limit("15/minute")
 async def ask(request: Request, body: AskRequest):
@@ -897,48 +970,68 @@ async def ask(request: Request, body: AskRequest):
     Answers a question about the app in general, OR about the user's
     specific forecast — grounded in retrieved domain knowledge, and in
     live forecast data only when the question actually needs it.
+
+    Every call is recorded by log_llm_call. If retrieval or the model fails
+    (for example Gemini is overloaded), the call is recorded as an error and
+    the client gets a 503 it can retry, not an unexplained 500.
     """
     global _ask_genai_client
     if _ask_genai_client is None:
         _ask_genai_client = genai.Client()
 
-    # Step 1 — retrieve relevant domain knowledge (always happens)
-    retrieved = retrieve(body.question, top_k=3)
-    knowledge_context = "\n\n".join([f"- {r['text']}" for r in retrieved])
-
-    # Step 2 — only fetch live forecast data if the question actually
-    # seems to be about the user's own numbers, and state/division
-    # were actually provided
-    forecast_summary = "Not applicable — this question does not require the user's live forecast data."
-    used_live_data = False
-
-    if body.state and body.division and _needs_live_forecast(body.question):
+    wants_live = bool(body.state and body.division and _needs_live_forecast(body.question))
+    if wants_live:                      # reject bad input before spending any LLM calls
         if body.state not in STATES:
             raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
         if body.division not in CATEGORIES:
             raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
 
-        forecast_result = get_forecast(body.state, body.division, body.horizon_months)
-        category_name = CATEGORIES.get(body.division, body.division)
-        forecast_summary = (
-            f"Category: {category_name} in {body.state}\n"
-            f"Forecast horizon: {body.horizon_months} months\n"
-            f"Latest real data date: {forecast_result['latest_real_date']}\n"
-            f"Month-by-month forecast: {forecast_result['forecasts']}"
+    started = time.perf_counter()
+    log = {
+        "endpoint": "/ask", "model": GENERATION_MODEL, "status": "ok",
+        "question": body.question, "question_chars": len(body.question),
+        "state": body.state, "division": body.division, "horizon_months": body.horizon_months,
+        "used_live_forecast_data": False,
+        "forecast_version": forecast_meta.get("version"),
+    }
+
+    try:
+        # Step 1 — retrieve relevant domain knowledge (always happens)
+        retrieved = retrieve(body.question, top_k=3)
+        log["retrieval_ms"] = round((time.perf_counter() - started) * 1000)
+        log["retrieved_ids"] = [r["id"] for r in retrieved]
+        log["retrieved_distances"] = [round(float(r["distance"]), 4) for r in retrieved if "distance" in r]
+        knowledge_context = "\n\n".join([f"- {r['text']}" for r in retrieved])
+
+        # Step 2 — only fetch live forecast data if the question actually
+        # seems to be about the user's own numbers, and state/division
+        # were actually provided
+        forecast_summary = "Not applicable — this question does not require the user's live forecast data."
+        used_live_data = False
+
+        if wants_live:
+            forecast_result = get_forecast(body.state, body.division, body.horizon_months)
+            category_name = CATEGORIES.get(body.division, body.division)
+            forecast_summary = (
+                f"Category: {category_name} in {body.state}\n"
+                f"Forecast horizon: {body.horizon_months} months\n"
+                f"Latest real data date: {forecast_result['latest_real_date']}\n"
+                f"Month-by-month forecast: {forecast_result['forecasts']}"
+            )
+            used_live_data = True
+        log["used_live_forecast_data"] = used_live_data
+
+        # Step 3 — build a grounded prompt
+        system_instruction = (
+            "You are a helpful assistant for a Malaysian personal inflation forecasting app. "
+            "You must ONLY use the domain knowledge and forecast data provided below — never invent "
+            "numbers, dates, or facts not present in this context. If the question cannot be answered "
+            "from the provided context, say so honestly rather than guessing. Keep answers concise, "
+            "in plain language. If the question is a general question about how the app works, answer "
+            "from the domain knowledge alone without needing specific numbers."
         )
-        used_live_data = True
 
-    # Step 3 — build a grounded prompt
-    system_instruction = (
-        "You are a helpful assistant for a Malaysian personal inflation forecasting app. "
-        "You must ONLY use the domain knowledge and forecast data provided below — never invent "
-        "numbers, dates, or facts not present in this context. If the question cannot be answered "
-        "from the provided context, say so honestly rather than guessing. Keep answers concise, "
-        "in plain language. If the question is a general question about how the app works, answer "
-        "from the domain knowledge alone without needing specific numbers."
-    )
-
-    prompt = f"""DOMAIN KNOWLEDGE:
+        prompt = f"""DOMAIN KNOWLEDGE:
 {knowledge_context}
 
 LIVE FORECAST DATA:
@@ -949,20 +1042,39 @@ USER QUESTION:
 
 Answer the user's question using only the domain knowledge and forecast data above."""
 
-    # Step 4 — generate the grounded answer
-    response = _ask_genai_client.models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
-        config={
-            "system_instruction": system_instruction,
-            "max_output_tokens": 300,
-            "temperature": 0.3,
-        },
-    )
+        # Step 4 — generate the grounded answer
+        gen_started = time.perf_counter()
+        response = _ask_genai_client.models.generate_content(
+            model=GENERATION_MODEL,
+            contents=prompt,
+            config={
+                "system_instruction": system_instruction,
+                "max_output_tokens": 300,
+                "temperature": 0.3,
+            },
+        )
+        answer = response.text
+        log["generation_ms"] = round((time.perf_counter() - gen_started) * 1000)
+        log["prompt_chars"] = len(prompt)
+        log["answer"] = answer
+        log["answer_chars"] = len(answer or "")
+        log["finish_reason"] = _finish_reason(response)
+        log.update(_token_usage(response))
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.update(status="error", error_type=e.__class__.__name__, error_message=str(e)[:500],
+                   total_ms=round((time.perf_counter() - started) * 1000))
+        log_llm_call(log)
+        logger.error(f"/ask failed: {e.__class__.__name__}: {e}")
+        raise HTTPException(status_code=503, detail=LLM_UNAVAILABLE)
+
+    log["total_ms"] = round((time.perf_counter() - started) * 1000)
+    log_llm_call(log)
 
     return {
         "question": body.question,
-        "answer": response.text,
+        "answer": answer,
         "retrieved_context": [r["id"] for r in retrieved],
         "used_live_forecast_data": used_live_data,
     }
@@ -1017,17 +1129,36 @@ Horizon: {body.summary_data.get('horizon_months')} months
 
 Generate a short, general suggestion for someone considering this move."""
 
-    response = _ask_genai_client.models.generate_content(
-        model=GENERATION_MODEL,
-        contents=prompt,
-        config={
-            "system_instruction": system_instruction,
-            "max_output_tokens": 150,
-            "temperature": 0.4,
-        },
-    )
+    # Only the shape of the call is recorded, never the user's figures.
+    started = time.perf_counter()
+    log = {"endpoint": "/prescriptive-insight", "model": GENERATION_MODEL, "status": "ok",
+           "context_type": body.context_type, "prompt_chars": len(prompt)}
+    try:
+        response = _ask_genai_client.models.generate_content(
+            model=GENERATION_MODEL,
+            contents=prompt,
+            config={
+                "system_instruction": system_instruction,
+                "max_output_tokens": 150,
+                "temperature": 0.4,
+            },
+        )
+        insight = response.text
+        log["generation_ms"] = round((time.perf_counter() - started) * 1000)
+        log["answer_chars"] = len(insight or "")
+        log["finish_reason"] = _finish_reason(response)
+        log.update(_token_usage(response))
+    except Exception as e:
+        log.update(status="error", error_type=e.__class__.__name__, error_message=str(e)[:500],
+                   total_ms=round((time.perf_counter() - started) * 1000))
+        log_llm_call(log)
+        logger.error(f"/prescriptive-insight failed: {e.__class__.__name__}: {e}")
+        raise HTTPException(status_code=503, detail=LLM_UNAVAILABLE)
 
-    return {"insight": response.text}
+    log["total_ms"] = round((time.perf_counter() - started) * 1000)
+    log_llm_call(log)
+
+    return {"insight": insight}
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
