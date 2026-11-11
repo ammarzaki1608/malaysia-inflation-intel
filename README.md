@@ -97,7 +97,7 @@ Grounded answer, with retrieved-context IDs returned for traceability
 - **correctness** against the expected answer
 - **refusal**: for out-of-scope questions, such as an exact future inflation figure or a fund recommendation, the bot must decline rather than invent
 
-It runs in CI against the live API after every API deploy and fails the workflow below a 0.7 threshold. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
+It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails below a 0.7 threshold. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
 
 ---
 
@@ -211,7 +211,8 @@ malaysia-inflation-intel/
     ├── terraform.yml             # validate Terraform on every PR
     ├── pr-build.yml              # build + smoke-test all three images on every PR
     ├── pipeline-image.yml        # build + push the monthly pipeline image
-    └── deploy.yml                # build + push + deploy on merge to main, then RAG evaluation
+    ├── deploy.yml                # build + push + deploy on merge to main
+    └── rag-eval.yml              # chatbot evaluation after an API deploy (skipped for app-only changes)
 ```
 
 ---

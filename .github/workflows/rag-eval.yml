@@ -1,0 +1,109 @@
+name: Evaluate chatbot answers
+
+# Scores the live /ask endpoint against evaluation/test_questions.py.
+#
+# This used to be a job inside deploy.yml. It lives here so that:
+#   - a slow Gemini day (20+ min) no longer holds up the next deploy, and
+#   - merges that only change the Streamlit app skip it: the chatbot is
+#     served by the API, so an app-only change cannot alter its answers.
+#
+# It runs:
+#   - after a successful deploy from main, if that commit changed ml/serving/
+#   - on a push to main that changed only evaluation/ (no deploy happens then)
+#   - on demand (Run workflow)
+on:
+  workflow_run:
+    workflows: ["Build and Deploy to Cloud Run"]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - 'evaluation/**'
+      - '.github/workflows/rag-eval.yml'
+  workflow_dispatch:
+
+# Only the newest deployed version is worth grading.
+concurrency:
+  group: rag-eval
+  cancel-in-progress: true
+
+env:
+  REGION: asia-southeast1
+
+jobs:
+  rag-eval:
+    name: Evaluate chatbot answers
+    runs-on: ubuntu-latest
+    timeout-minutes: 35   # healthy run ~6-8 min; slow Gemini days ~20+; the script gives up at 30
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # optional: a stronger model than the one answering, to avoid self-grading
+      JUDGE_MODEL: ${{ vars.JUDGE_MODEL || 'gemini-3.1-flash-lite' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # grade with the test set from the commit that was deployed
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 2
+
+      - name: Decide whether this change needs an evaluation
+        id: guard
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo "::warning::GEMINI_API_KEY secret not set — skipping RAG evaluation"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Files changed by this commit (for a merged PR: everything in the PR).
+          changed=$(git diff --name-only HEAD^1 HEAD)
+          api_changed=false
+          if echo "$changed" | grep -q '^ml/serving/'; then api_changed=true; fi
+
+          run=true
+          case "$EVENT" in
+            workflow_run)
+              # after a deploy: only the API can change the chatbot's answers
+              if [ "$api_changed" = false ]; then
+                run=false
+                echo "::notice::Deploy did not change ml/serving/ — skipping RAG evaluation"
+              fi ;;
+            push)
+              # evaluation/ changed. If the API changed too, a deploy is running
+              # and this workflow will be triggered again when it finishes.
+              if [ "$api_changed" = true ]; then
+                run=false
+                echo "::notice::API also changed — evaluation will run after the deploy finishes"
+              fi ;;
+          esac
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to GCP
+        if: steps.guard.outputs.run == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Get deployed API URL
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          URL=$(gcloud run services describe inflation-api --region ${{ env.REGION }} --format 'value(status.url)')
+          echo "API_URL=$URL" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        if: steps.guard.outputs.run == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Run evaluation against the deployed API
+        if: steps.guard.outputs.run == 'true'
+        working-directory: evaluation
+        run: |
+          pip install -r requirements.txt
+          curl -sf "$API_URL/health" > /dev/null   # wake the service before timing-sensitive calls
+          python run_eval.py
