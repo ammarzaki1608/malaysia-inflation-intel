@@ -22,5 +22,4 @@ select = ["E9", "F"]
 # Existing unused names in deployed files. Left as they are so that adding the
 # linter does not trigger a redeploy; remove each entry the next time its file changes.
 "app/streamlit/app.py" = ["F401", "F841"]
-"ml/serving/api.py" = ["F401"]
 "ml/training/backtest.py" = ["F841"]

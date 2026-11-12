@@ -3,7 +3,7 @@ Fixtures for the API tests.
 
 The tests never touch GCP or Gemini. The API normally loads its forecast table
 and RAG index at startup; here the startup hook is not run (TestClient is used
-without a `with` block) and the module-level state is filled in directly.
+without a `with` block) and the state held by the `service` modules is filled in directly.
 """
 
 import os
@@ -15,6 +15,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ml", "serving"))
 
 import api  # noqa: E402
+from service import forecasts, legacy  # noqa: E402
+from service import llm_log as llm_logging  # noqa: E402
+from service.config import limiter  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 
@@ -44,8 +47,8 @@ def forecast_table(monkeypatch):
         ("Kedah", "01"): make_rows("Kedah", "01", 128.0, 3.1),
         ("Selangor", "07"): make_rows("Selangor", "07", 120.0, -0.4),
     }
-    monkeypatch.setattr(api, "forecast_rows", table)
-    monkeypatch.setattr(api, "forecast_meta", {"version": "test_v1", "interval_level": 0.8,
+    monkeypatch.setattr(forecasts, "forecast_rows", table)
+    monkeypatch.setattr(forecasts, "forecast_meta", {"version": "test_v1", "interval_level": 0.8,
                                                "base_date": "2026-09-01"})
     return table
 
@@ -53,13 +56,13 @@ def forecast_table(monkeypatch):
 @pytest.fixture
 def client(monkeypatch):
     # "just checked": stops maybe_refresh_forecast_table() from calling GCS
-    monkeypatch.setattr(api, "_forecast_checked_at", time.time())
-    monkeypatch.setattr(api, "forecast_rows", {})
-    monkeypatch.setattr(api, "forecast_meta", {})
-    monkeypatch.setattr(api, "model", None)
-    monkeypatch.setattr(api.limiter, "enabled", False)
-    monkeypatch.setattr(api, "LLM_LOG_ENABLED", False)      # never write to BigQuery from tests
-    monkeypatch.setattr(api, "EVAL_LOG_TOKEN", "test-eval-token")
+    monkeypatch.setattr(forecasts, "_forecast_checked_at", time.time())
+    monkeypatch.setattr(forecasts, "forecast_rows", {})
+    monkeypatch.setattr(forecasts, "forecast_meta", {})
+    monkeypatch.setattr(legacy, "model", None)
+    monkeypatch.setattr(limiter, "enabled", False)
+    monkeypatch.setattr(llm_logging, "LLM_LOG_ENABLED", False)      # never write to BigQuery from tests
+    monkeypatch.setattr(llm_logging, "EVAL_LOG_TOKEN", "test-eval-token")
     return TestClient(api.app)
 
 
@@ -67,5 +70,5 @@ def client(monkeypatch):
 def llm_log(monkeypatch):
     """Capture the rows log_llm_call would write, instead of writing them."""
     rows = []
-    monkeypatch.setattr(api, "log_llm_call", rows.append)
+    monkeypatch.setattr(llm_logging, "log_llm_call", rows.append)
     return rows

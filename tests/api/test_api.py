@@ -1,10 +1,13 @@
-"""Tests for ml/serving/api.py. No network: GCS, BigQuery and Gemini are never called."""
+"""Tests for the API (ml/serving). No network: GCS, BigQuery and Gemini are never called."""
 
 import json
 from types import SimpleNamespace
 
 import api
 import pytest
+from fastapi.testclient import TestClient
+from service import chat, chat_tools, data, forecasts, legacy
+from service import llm_log as llm_logging
 
 
 # ── reference endpoints ──────────────────────────────────────────────────────
@@ -52,9 +55,38 @@ def test_forecast_rejects_bad_input(client, forecast_table, params, fragment):
 def test_forecast_503_when_no_table_and_no_legacy_model(client, monkeypatch):
     def boom():
         raise RuntimeError("no GCS in tests")
-    monkeypatch.setattr(api, "load_model_from_gcs", boom)
+    monkeypatch.setattr(legacy, "load_model_from_gcs", boom)
     r = client.get("/forecast", params={"state": "Selangor", "division": "01"})
     assert r.status_code == 503
+
+
+def test_forecast_falls_back_to_the_legacy_model_when_the_table_has_no_entry(client, monkeypatch):
+    history = [{"date": f"2025-{m:02d}-01", "cpi_index": 100.0 + m, "ppi_index": 110.0, "opr_rate": 2.75}
+               for m in range(1, 13)] + [{"date": "2026-01-01", "cpi_index": 113.0, "ppi_index": 110.0,
+                                          "opr_rate": 2.75}]
+    monkeypatch.setattr(data, "feature_history", lambda state, division, months_back=15: history)
+    monkeypatch.setattr(legacy, "model", SimpleNamespace(predict=lambda X: [float(X[0][0]) + 1.0]))
+    body = client.get("/forecast", params={"state": "Selangor", "division": "01", "horizon_months": 3}).json()
+    assert body["source"] == "legacy_recursive"
+    # each step feeds on the one before it: 113 -> 114 -> 115 -> 116
+    assert [s["predicted_index"] for s in body["forecast"]] == [114.0, 115.0, 116.0]
+    assert body["latest_real_date"] == "2026-01-01"
+
+
+def test_startup_survives_a_missing_forecast_table_and_does_not_load_the_legacy_model(monkeypatch):
+    """The legacy model is only downloaded when a fallback forecast is actually asked for."""
+    def no_table(force=False):
+        raise RuntimeError("forecasts/latest.json not found")
+
+    def must_not_run():
+        raise AssertionError("the legacy model was loaded at startup")
+    monkeypatch.setattr(forecasts, "load_forecast_table", no_table)
+    monkeypatch.setattr(forecasts, "forecast_rows", {})
+    monkeypatch.setattr(legacy, "load_model_from_gcs", must_not_run)
+    monkeypatch.setattr(chat, "load_index_from_gcs", lambda: None)
+    with TestClient(api.app) as started:
+        body = started.get("/health").json()
+    assert body["status"] == "ok" and body["forecast_table_loaded"] is False
 
 
 # ── /forecasts (bulk) ────────────────────────────────────────────────────────
@@ -95,10 +127,48 @@ def test_income_snapshot_rejects_unknown_state(client):
     assert "Unknown state" in r.json()["detail"]
 
 
-def test_price_ratio_rejects_bad_input(client):
-    ok = {"origin_state": "Selangor", "destination_state": "Kedah", "division": "01"}
-    for key, bad in [("origin_state", "X"), ("destination_state", "X"), ("division", "99")]:
-        assert client.get("/price-ratio", params={**ok, key: bad}).status_code == 400
+def test_the_deprecated_price_ratio_endpoint_is_gone(client):
+    assert client.get("/price-ratio", params={"origin_state": "Selangor", "destination_state": "Kedah",
+                                              "division": "01"}).status_code == 404
+
+
+# ── BigQuery-backed endpoints, with the queries replaced ─────────────────────
+
+def test_headline_inflation_compares_the_latest_month_with_a_year_earlier(client, monkeypatch):
+    rows = [{"date": f"month-{i}", "index": 102.0 if i == 0 else 100.0} for i in range(13)]
+    monkeypatch.setattr(data, "national_headline_cpi", lambda: rows)
+    body = client.get("/headline-inflation").json()
+    assert body == {"headline_inflation_pct": 2.0, "latest_date": "month-0", "compared_to_date": "month-12"}
+
+    monkeypatch.setattr(data, "national_headline_cpi", lambda: rows[:5])
+    assert client.get("/headline-inflation").status_code == 404
+
+
+def test_category_leaderboard_ranks_fastest_rising_first_and_skips_short_histories(client, monkeypatch):
+    def series(latest):
+        return [{"index": latest}] + [{"index": 100.0}] * 12
+    monkeypatch.setattr(data, "national_cpi_by_division",
+                        lambda: {"01": series(103.0), "07": series(105.5), "06": series(101.0)[:6]})
+    cats = client.get("/category-leaderboard").json()["categories"]
+    assert [(c["division"], c["yoy_change_pct"]) for c in cats] == [("07", 5.5), ("01", 3.0)]
+    assert cats[0]["category_name"] == "Transport"
+
+
+def test_state_leaderboard_uses_the_mart_when_there_is_no_forecast_table(client, monkeypatch):
+    monkeypatch.setattr(data, "latest_cpi_by_state", lambda division: [
+        {"state": "Perak", "cpi_index": 102.0, "cpi_lag_12": 100.0, "date": "2026-09-01"},
+        {"state": "Johor", "cpi_index": 104.0, "cpi_lag_12": 100.0, "date": "2026-09-01"},
+        {"state": "Sabah", "cpi_index": 104.0, "cpi_lag_12": None, "date": "2026-09-01"},
+    ])
+    states = client.get("/state-leaderboard", params={"division": "01"}).json()["states"]
+    assert [(s["state"], s["yoy_change_pct"]) for s in states] == [("Johor", 4.0), ("Perak", 2.0)]
+
+
+def test_trends_and_income_snapshot_return_404_when_there_is_no_data(client, monkeypatch):
+    monkeypatch.setattr(data, "feature_history", lambda state, division, months_back=15: [])
+    monkeypatch.setattr(data, "income_snapshot", lambda state: None)
+    assert client.get("/trends", params={"state": "Selangor", "division": "01"}).status_code == 404
+    assert client.get("/income-snapshot", params={"state": "Selangor"}).status_code == 404
 
 
 # ── /state-leaderboard ───────────────────────────────────────────────────────
@@ -119,16 +189,16 @@ def test_forecast_accuracy_serves_the_published_scorecard(client, monkeypatch, t
     card = {"scored_forecasts": 208, "by_horizon": {"1": {"rel_mae": 1.004, "coverage_80": 0.793}}}
     path = tmp_path / "scorecard.json"
     path.write_text(json.dumps(card), encoding="utf-8")
-    monkeypatch.setattr(api, "SCORECARD_LOCAL_PATH", str(path))
-    monkeypatch.setattr(api, "_scorecard", {"data": None, "checked_at": 0.0})
+    monkeypatch.setattr(forecasts, "SCORECARD_LOCAL_PATH", str(path))
+    monkeypatch.setattr(forecasts, "_scorecard", {"data": None, "checked_at": 0.0})
     r = client.get("/forecast-accuracy")
     assert r.status_code == 200
     assert r.json() == card
 
 
 def test_forecast_accuracy_404_before_first_scorecard(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api, "SCORECARD_LOCAL_PATH", str(tmp_path / "missing.json"))
-    monkeypatch.setattr(api, "_scorecard", {"data": None, "checked_at": 0.0})
+    monkeypatch.setattr(forecasts, "SCORECARD_LOCAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(forecasts, "_scorecard", {"data": None, "checked_at": 0.0})
     assert client.get("/forecast-accuracy").status_code == 404
 
 
@@ -163,8 +233,8 @@ def install_llm(monkeypatch, script):
                       "config": config})
         return script[min(len(calls), len(script)) - 1]
 
-    monkeypatch.setattr(api, "retrieve", fake_retrieve)
-    monkeypatch.setattr(api, "_ask_genai_client",
+    monkeypatch.setattr(chat, "retrieve", fake_retrieve)
+    monkeypatch.setattr(chat, "_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
     return calls
 
@@ -203,7 +273,7 @@ def test_ask_offers_the_tools_and_runs_them_itself(client, fake_llm):
     client.post("/ask", json={"question": "What does B40 mean?"})
     config = fake_llm[0]["config"]
     names = [d["name"] for d in config["tools"][0]["function_declarations"]]
-    assert sorted(names) == sorted(api.ASK_TOOL_FUNCTIONS)
+    assert sorted(names) == sorted(chat_tools.ASK_TOOL_FUNCTIONS)
     assert config["automatic_function_calling"] == {"disable": True}
     assert config["tool_config"]["function_calling_config"]["mode"] == "AUTO"
     assert "Nothing selected." in prompt_of(fake_llm[0])
@@ -265,7 +335,7 @@ def test_ask_forces_an_answer_after_the_round_limit(client, forecast_table, monk
     calls = install_llm(monkeypatch, [again, again, model_turn(text="Final answer.")])
     r = client.post("/ask", json={"question": "Which state?"})
     assert r.status_code == 200 and r.json()["answer"] == "Final answer."
-    assert len(calls) == api.ASK_MAX_TOOL_ROUNDS + 1
+    assert len(calls) == chat.ASK_MAX_TOOL_ROUNDS + 1
     modes = [c["config"]["tool_config"]["function_calling_config"]["mode"] for c in calls]
     assert modes == ["AUTO", "AUTO", "NONE"]                # the last call may not ask for tools
 
@@ -275,14 +345,14 @@ def test_ask_returns_503_if_the_model_never_answers(client, forecast_table, monk
     calls = install_llm(monkeypatch, [forever])
     r = client.post("/ask", json={"question": "How accurate?"})
     assert r.status_code == 503
-    assert len(calls) == api.ASK_MAX_TOOL_ROUNDS + 1         # it stopped; it did not loop forever
+    assert len(calls) == chat.ASK_MAX_TOOL_ROUNDS + 1         # it stopped; it did not loop forever
 
 
 def test_ask_caps_the_number_of_tool_calls(client, forecast_table, monkeypatch):
     greedy = model_turn(calls=[tool_call("get_forecast", state="Selangor", category="01")] * 10)
     calls = install_llm(monkeypatch, [greedy, model_turn(text="Enough.")])
     r = client.post("/ask", json={"question": "Everything please"})
-    assert len(r.json()["tools_called"]) == api.ASK_MAX_TOOL_CALLS
+    assert len(r.json()["tools_called"]) == chat.ASK_MAX_TOOL_CALLS
     assert calls[1]["config"]["tool_config"]["function_calling_config"]["mode"] == "NONE"
 
 
@@ -307,18 +377,18 @@ def test_a_bad_tool_argument_goes_back_to_the_model_as_an_error(client, forecast
     ("rank_states", {"category": "Gold bars"}, "Unknown category"),
 ])
 def test_tools_report_problems_instead_of_raising(client, forecast_table, name, args, expected):
-    assert expected in api.run_tool(name, args)["error"]
+    assert expected in chat_tools.run_tool(name, args)["error"]
 
 
 def test_a_crashing_tool_does_not_take_the_answer_down(client, monkeypatch):
     def boom(**kwargs):
         raise RuntimeError("storage is down")
-    monkeypatch.setitem(api.ASK_TOOL_FUNCTIONS, "get_forecast_accuracy", boom)
-    assert api.run_tool("get_forecast_accuracy", {}) == {"error": "get_forecast_accuracy is unavailable right now."}
+    monkeypatch.setitem(chat_tools.ASK_TOOL_FUNCTIONS, "get_forecast_accuracy", boom)
+    assert chat_tools.run_tool("get_forecast_accuracy", {}) == {"error": "get_forecast_accuracy is unavailable right now."}
 
 
 def test_get_forecast_tool_reports_change_from_the_latest_actual_month(client, forecast_table):
-    out = api.tool_get_forecast("Selangor", "Food & Non-Alcoholic Beverages", 3)
+    out = chat_tools.tool_get_forecast("Selangor", "Food & Non-Alcoholic Beverages", 3)
     assert out["latest_actual_month"] == "2026-09" and out["change_over_past_12_months_pct"] == 2.5
     assert [m["month"] for m in out["forecast"]] == ["2026-10", "2026-11", "2026-12"]
     assert [m["expected_change_pct"] for m in out["forecast"]] == [0.2, 0.4, 0.6]
@@ -326,34 +396,34 @@ def test_get_forecast_tool_reports_change_from_the_latest_actual_month(client, f
     assert first["range_low_pct"] < first["expected_change_pct"] < first["range_high_pct"]
     assert out["range_confidence_pct"] == 80
     # a code works as well as a name, and the horizon is kept inside 1..12
-    assert api.tool_get_forecast("Selangor", "01", 99)["horizon_months"] == 12
-    assert api.tool_get_forecast("Selangor", "transport", "soon")["horizon_months"] == 6
+    assert chat_tools.tool_get_forecast("Selangor", "01", 99)["horizon_months"] == 12
+    assert chat_tools.tool_get_forecast("Selangor", "transport", "soon")["horizon_months"] == 6
 
 
 def test_rank_tools_put_the_biggest_rise_first(client, forecast_table, monkeypatch):
-    rows = api.forecast_rows[("Kedah", "01")]
-    monkeypatch.setitem(api.forecast_rows, ("Kedah", "01"),
+    rows = forecasts.forecast_rows[("Kedah", "01")]
+    monkeypatch.setitem(forecasts.forecast_rows, ("Kedah", "01"),
                         [dict(r, predicted_index=r["base_index"] * 1.05) for r in rows])
-    states = api.tool_rank_states("Food & Non-Alcoholic Beverages", 6)["states_biggest_rise_first"]
+    states = chat_tools.tool_rank_states("Food & Non-Alcoholic Beverages", 6)["states_biggest_rise_first"]
     assert [s["name"] for s in states] == ["Kedah", "Selangor"]         # only states with a forecast
     assert states[0]["forecast_change_pct"] == 5.0 and states[1]["forecast_change_pct"] == 1.2
 
-    cats = api.tool_rank_categories("Selangor", 12)["categories_biggest_rise_first"]
+    cats = chat_tools.tool_rank_categories("Selangor", 12)["categories_biggest_rise_first"]
     assert {c["name"] for c in cats} == {"Food & Non-Alcoholic Beverages", "Transport"}
     assert cats[0]["forecast_change_pct"] >= cats[1]["forecast_change_pct"]
 
 
 def test_forecast_accuracy_tool(client, monkeypatch, tmp_path):
-    monkeypatch.setattr(api, "_scorecard", {"checked_at": 1e12, "data": {
+    monkeypatch.setattr(forecasts, "_scorecard", {"checked_at": 1e12, "data": {
         "latest_actual_date": "2026-09-01", "scored_forecasts": 208,
         "by_horizon": {"1": {"n": 208, "mae_pp": 0.268, "rel_mae": 1.004, "coverage_80": 0.793}}}})
-    out = api.tool_get_forecast_accuracy()
+    out = chat_tools.tool_get_forecast_accuracy()
     assert out["forecasts_scored"] == 208 and out["by_months_ahead"]["1"]["coverage_80"] == 0.793
 
     # nothing published yet (a missing local file, so the test never reaches GCS)
-    monkeypatch.setattr(api, "SCORECARD_LOCAL_PATH", str(tmp_path / "missing.json"))
-    monkeypatch.setattr(api, "_scorecard", {"checked_at": 0.0, "data": None})
-    assert "error" in api.tool_get_forecast_accuracy()
+    monkeypatch.setattr(forecasts, "SCORECARD_LOCAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(forecasts, "_scorecard", {"checked_at": 0.0, "data": None})
+    assert "error" in chat_tools.tool_get_forecast_accuracy()
 
 
 @pytest.mark.parametrize("payload", [
@@ -397,7 +467,7 @@ def test_ask_logs_one_row_with_retrieval_latency_and_tokens(client, forecast_tab
     def generate_content(model, contents, config):
         return SimpleNamespace(text="A grounded answer.", usage_metadata=_Usage(),
                                candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))])
-    monkeypatch.setattr(api, "_ask_genai_client",
+    monkeypatch.setattr(chat, "_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
 
     r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
@@ -405,7 +475,7 @@ def test_ask_logs_one_row_with_retrieval_latency_and_tokens(client, forecast_tab
     assert len(llm_log) == 1
     row = llm_log[0]
     assert row["endpoint"] == "/ask" and row["status"] == "ok"
-    assert row["model"] == api.GENERATION_MODEL
+    assert row["model"] == chat.GENERATION_MODEL
     assert row["question"] == "What does B40 mean?" and row["answer"] == "A grounded answer."
     assert row["retrieved_ids"] == ["kb_one", "kb_two"]
     assert row["retrieved_distances"] == [0.1, 0.2]
@@ -421,12 +491,12 @@ def test_ask_returns_503_and_logs_the_error_when_gemini_fails(client, forecast_t
     """A Gemini outage used to surface as an unexplained 500."""
     def overloaded(model, contents, config):
         raise RuntimeError("503 UNAVAILABLE: the model is overloaded")
-    monkeypatch.setattr(api, "_ask_genai_client",
+    monkeypatch.setattr(chat, "_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
 
     r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 503
-    assert r.json()["detail"] == api.LLM_UNAVAILABLE
+    assert r.json()["detail"] == chat.LLM_UNAVAILABLE
     assert len(llm_log) == 1
     row = llm_log[0]
     assert row["status"] == "error" and row["error_type"] == "RuntimeError"
@@ -438,7 +508,7 @@ def test_ask_returns_503_and_logs_the_error_when_gemini_fails(client, forecast_t
 def test_ask_returns_503_when_retrieval_fails(client, fake_llm, llm_log, monkeypatch):
     def broken(query, top_k=3):
         raise RuntimeError("embedding service unavailable")
-    monkeypatch.setattr(api, "retrieve", broken)
+    monkeypatch.setattr(chat, "retrieve", broken)
     r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 503
     assert llm_log[0]["status"] == "error" and "retrieved_ids" not in llm_log[0]
@@ -455,8 +525,8 @@ def test_a_failing_log_write_never_breaks_the_answer(client, fake_llm, monkeypat
     class BrokenBigQuery:
         def insert_rows_json(self, *args, **kwargs):
             raise RuntimeError("BigQuery is down")
-    monkeypatch.setattr(api, "LLM_LOG_ENABLED", True)
-    monkeypatch.setattr(api, "bq_client", BrokenBigQuery())
+    monkeypatch.setattr(llm_logging, "LLM_LOG_ENABLED", True)
+    monkeypatch.setattr(data, "_client", BrokenBigQuery())
     r = client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
     assert r.status_code == 200 and r.json()["answer"] == "A grounded answer."
 
@@ -468,12 +538,12 @@ def test_log_row_is_written_to_the_configured_table(client, fake_llm, monkeypatc
         def insert_rows_json(self, table, rows, **kwargs):
             written.append((table, rows))
             return []
-    monkeypatch.setattr(api, "LLM_LOG_ENABLED", True)
-    monkeypatch.setattr(api, "bq_client", FakeBigQuery())
+    monkeypatch.setattr(llm_logging, "LLM_LOG_ENABLED", True)
+    monkeypatch.setattr(data, "_client", FakeBigQuery())
     client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
 
     (table, rows), = written
-    assert table == api.LLM_LOG_TABLE and table.endswith(".observability.llm_calls")
+    assert table == llm_logging.LLM_LOG_TABLE and table.endswith(".observability.llm_calls")
     row = rows[0]
     assert len(row["call_id"]) == 32 and row["ts"].endswith("+00:00")
     assert row["api_revision"] == "local"
@@ -495,7 +565,7 @@ def test_prescriptive_insight_logs_the_call_but_not_the_users_figures(client, fa
 def test_prescriptive_insight_returns_503_when_gemini_fails(client, llm_log, monkeypatch):
     def overloaded(model, contents, config):
         raise RuntimeError("503 UNAVAILABLE")
-    monkeypatch.setattr(api, "_ask_genai_client",
+    monkeypatch.setattr(chat, "_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
     r = client.post("/prescriptive-insight", headers=EVAL, json={"context_type": "relocation_planner", "summary_data": {}})
     assert r.status_code == 503
@@ -532,7 +602,7 @@ def test_a_users_insight_request_is_never_logged(client, fake_llm, llm_log):
 def test_a_users_failed_call_is_not_logged_either(client, llm_log, monkeypatch):
     def overloaded(model, contents, config):
         raise RuntimeError("503 UNAVAILABLE")
-    monkeypatch.setattr(api, "_ask_genai_client",
+    monkeypatch.setattr(chat, "_genai_client",
                         SimpleNamespace(models=SimpleNamespace(generate_content=overloaded)))
     r = client.post("/ask", json={"question": "What does B40 mean?"})
     assert r.status_code == 503
@@ -546,7 +616,7 @@ def test_a_wrong_token_is_not_logged(client, fake_llm, llm_log):
 
 def test_nothing_is_logged_when_the_server_has_no_token(client, fake_llm, llm_log, monkeypatch):
     """An unset token must not match an empty or missing header."""
-    monkeypatch.setattr(api, "EVAL_LOG_TOKEN", "")
+    monkeypatch.setattr(llm_logging, "EVAL_LOG_TOKEN", "")
     client.post("/ask", json={"question": "What does B40 mean?"})
     client.post("/ask", headers={"X-Eval-Token": ""}, json={"question": "What does B40 mean?"})
     client.post("/ask", headers=EVAL, json={"question": "What does B40 mean?"})
