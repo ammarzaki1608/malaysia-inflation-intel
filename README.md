@@ -1,4 +1,6 @@
-# Malaysia Personal Inflation Intelligence
+# Real Ringgit
+
+*Personal inflation forecasts for Malaysia*
 
 **Official inflation is one national number. Yours depends on what you spend.** This system forecasts Malaysian CPI by state and category from official DOSM and BNM data, refreshes itself every month, and turns it into a personal forecast in ringgit, in English and Bahasa Malaysia.
 

@@ -1,5 +1,5 @@
 """
-Malaysia Personal Inflation Intelligence — Streamlit App
+Real Ringgit: personal inflation forecasts for Malaysia (Streamlit app)
 
 A citizen-facing tool that calculates personal inflation rates
 and helps Malaysians plan relocation decisions using official
@@ -27,7 +27,7 @@ from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
 
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
-    page_title="Malaysia Inflation Intelligence",
+    page_title="Real Ringgit: personal inflation for Malaysia",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -54,7 +54,7 @@ CATEGORIES = {
 
 LANG = {
     "en": {
-        "app_title": "Malaysia Personal Inflation Intelligence",
+        "app_title": "Real Ringgit",
         "app_tagline": "Built on official DOSM & BNM data",
         "mode_label": "Choose mode",
         "mode_home": "Home",
@@ -114,7 +114,7 @@ LANG = {
         "explore_further_text": "Want to see how this plays out over time in your state? Explore below.",
     },
     "ms": {
-        "app_title": "Maklumat Inflasi Peribadi Malaysia",
+        "app_title": "Real Ringgit",
         "app_tagline": "Dibangunkan berdasarkan data rasmi DOSM & BNM",
         "mode_label": "Pilih mod",
         "mode_home": "Utama",
@@ -2403,10 +2403,10 @@ def main():
 
     st.markdown("---")
     footer_text = (
-        "Malaysia Personal Inflation Intelligence | Data: DOSM & BNM via data.gov.my | "
+        "Real Ringgit | Data: DOSM & BNM via data.gov.my | "
         "Forecasts: ETS + XGBoost ensemble, backtested on 2018–2026 CPI data | Built by Muhammad Ammar Ahmad Zaki"
         if lang == "en" else
-        "Maklumat Inflasi Peribadi Malaysia | Data: DOSM & BNM melalui data.gov.my | "
+        "Real Ringgit | Data: DOSM & BNM melalui data.gov.my | "
         "Ramalan: gabungan ETS + XGBoost, diuji semula atas data CPI 2018–2026 | Dibina oleh Muhammad Ammar Ahmad Zaki"
     )
     st.markdown(f"""
