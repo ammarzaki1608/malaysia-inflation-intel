@@ -297,10 +297,12 @@ st.markdown("""
 
 # ── navigation helpers ────────────────────────────────────────────────────────
 
-def go_to_page(index: int, lang: str) -> None:
-    """Button callback: switch the page menu to `index`."""
+def go_to_page(index: int) -> None:
+    """
+    Button callback: switch the page menu to `index`. Only our own page state is
+    set; the menu reads it as its start value on the next run (see render_top_bar).
+    """
     st.session_state.page = index
-    st.session_state[f"mode_select_{lang}"] = index
 
 
 def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
@@ -610,15 +612,17 @@ def render_top_bar() -> tuple:
         except ValueError:
             page = 0
         st.session_state.page = page if 0 <= page < len(MODE_KEYS) else 0
-    nav_key = f"mode_select_{lang}"
     with col_mode:
+        # `index` must be passed on every run, with the same value the menu had when it
+        # was created. Streamlit 1.37 includes `index` in a widget's identity, so
+        # passing it only sometimes makes the menu a NEW widget on the next run, which
+        # starts at Home: that sent anyone who opened or refreshed a ?page=2 link back
+        # to Home on their first click.
         mode = st.radio(
             t["mode_label"], options=list(range(len(MODE_KEYS))),
-            # only a new widget takes its start value from `index`; once it exists (or a
-            # button has set it through go_to_page) Streamlit keeps the value in state
-            **({} if nav_key in st.session_state else {"index": st.session_state.page}),
+            index=st.session_state.page,
             format_func=lambda i: t[MODE_KEYS[i]], horizontal=True,
-            key=nav_key, label_visibility="collapsed",
+            key=f"mode_select_{lang}", label_visibility="collapsed",
         )
     st.session_state.page = mode
     st.query_params["page"] = str(mode)
@@ -858,7 +862,7 @@ def render_home(t, lang):
         # one unindented block with no blank lines: markdown would read either as code
         st.markdown(f"<div class='mi-hero'><h1>{H['headline']}</h1><p>{H['sub']}</p></div>",
                     unsafe_allow_html=True)
-        st.button(H["cta"], type="primary", key="hero_cta", on_click=go_to_page, args=(2, lang))
+        st.button(H["cta"], type="primary", key="hero_cta", on_click=go_to_page, args=(2,))
     with right:
         def row(label, value, width, colour, value_colour="#2C2C2A"):
             return (f"<div class='mi-row'><span>{label}</span><span style='color:{value_colour}'>{value}</span></div>"
@@ -880,11 +884,11 @@ def render_home(t, lang):
     with col_a:
         with st.container(border=True):
             st.markdown(f"#### {card1_title}\n\n{card1_body}\n\n**{card1_best}**")
-            st.button(H["open_calc"], key="card_calc", on_click=go_to_page, args=(2, lang))
+            st.button(H["open_calc"], key="card_calc", on_click=go_to_page, args=(2,))
     with col_b:
         with st.container(border=True):
             st.markdown(f"#### {card2_title}\n\n{card2_body}\n\n**{card2_best}**")
-            st.button(H["open_reloc"], key="card_reloc", on_click=go_to_page, args=(3, lang))
+            st.button(H["open_reloc"], key="card_reloc", on_click=go_to_page, args=(3,))
 
     st.divider()
 
@@ -930,7 +934,7 @@ def render_home(t, lang):
                 unsafe_allow_html=True)
     _, middle, _ = st.columns([1, 1, 1])
     with middle:
-        st.button(H["cta"], type="primary", key="closing_cta", on_click=go_to_page, args=(2, lang),
+        st.button(H["cta"], type="primary", key="closing_cta", on_click=go_to_page, args=(2,),
                   use_container_width=True)
 
     # ── official inflation line, last (see eyebrow_slot above) ───────────────

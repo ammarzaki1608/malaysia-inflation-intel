@@ -27,7 +27,7 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run app unit tests
         working-directory: app/streamlit
-        run: python -m unittest -v test_budget test_user_profile test_ui_logic test_api_cache
+        run: python -m unittest -v test_budget test_user_profile test_ui_logic test_api_cache test_navigation
 
   build:
     name: Build ${{ matrix.name }}
