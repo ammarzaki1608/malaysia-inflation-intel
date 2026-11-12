@@ -4,7 +4,6 @@ The pieces behind the API in ml/serving/api.py.
     config       settings, the lists of states and categories, the rate limiter
     data         every BigQuery query
     forecasts    the precomputed forecast table and the published scorecard
-    legacy       the old recursive XGBoost model (fallback only)
     chat         /ask and /prescriptive-insight
     chat_tools   the tools the chatbot may call
     llm_log      logging of LLM calls (evaluation traffic only)

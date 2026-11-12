@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from service import chat, data, forecasts, legacy
+from service import chat, data, forecasts
 from service.config import CATEGORIES, PROJECT_ID, STATES, limiter, logger
 
 
@@ -40,8 +40,8 @@ async def lifespan(app: FastAPI):
     try:
         forecasts.load_forecast_table(force=True)
     except Exception as e:
-        # Keep serving: the table is re-checked on the next forecast request,
-        # and until it loads forecasts come from the legacy model.
+        # Keep serving: everything else still works, forecast requests get a
+        # 503, and the table is tried again within a minute.
         logger.warning(f"Forecast table not loaded at startup: {e}")
     chat.load_index_from_gcs()
     yield
@@ -96,7 +96,6 @@ async def health():
         "forecast_table_loaded": bool(forecasts.forecast_rows),
         "forecast_version": forecasts.forecast_meta.get("version"),
         "forecast_base_date": forecasts.forecast_meta.get("base_date"),
-        "legacy_model_loaded": legacy.model is not None,
         "project": PROJECT_ID,
     }
 

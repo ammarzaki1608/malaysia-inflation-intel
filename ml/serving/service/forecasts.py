@@ -9,14 +9,15 @@ import json
 import os
 import time
 
+from fastapi import HTTPException
 from google.cloud import storage
 
-from service import legacy
 from service.config import CATEGORIES, GCS_BUCKET, PROJECT_ID, logger
 
 FORECAST_GCS_PATH = os.getenv("FORECAST_GCS_PATH", "forecasts/latest.json")
 FORECAST_LOCAL_PATH = os.getenv("FORECAST_LOCAL_PATH")      # for local testing only
 FORECAST_REFRESH_S = int(os.getenv("FORECAST_REFRESH_SECONDS", "3600"))
+FORECAST_RETRY_S = 60       # how soon to try again while no table is loaded at all
 SCORECARD_GCS_PATH = os.getenv("SCORECARD_GCS_PATH", "forecasts/scorecard.json")
 SCORECARD_LOCAL_PATH = os.getenv("SCORECARD_LOCAL_PATH")    # for local testing only
 
@@ -63,8 +64,12 @@ def load_forecast_table(force: bool = False) -> bool:
 
 
 def maybe_refresh_forecast_table() -> None:
-    """Re-check for a newer table at most every FORECAST_REFRESH_S seconds; never raises."""
-    if time.time() - _forecast_checked_at < FORECAST_REFRESH_S:
+    """
+    Re-check for a newer table at most every FORECAST_REFRESH_S seconds; never raises.
+    While no table is loaded (the load at startup failed), try again every minute.
+    """
+    wait = FORECAST_REFRESH_S if forecast_rows else min(FORECAST_RETRY_S, FORECAST_REFRESH_S)
+    if time.time() - _forecast_checked_at < wait:
         return
     try:
         load_forecast_table()
@@ -74,13 +79,15 @@ def maybe_refresh_forecast_table() -> None:
 
 def get_forecast(state: str, division: str, horizon_months: int) -> dict:
     """
-    Forecast for one series, from the precomputed table. Only if the table has
-    no entry for this series does it fall back to the legacy model.
+    Forecast for one series, from the precomputed table. No model runs here.
+    503 while no table is loaded; 404 if the table has no entry for this series.
     """
     maybe_refresh_forecast_table()
+    if not forecast_rows:
+        raise HTTPException(status_code=503, detail="Forecasts are not available right now.")
     rows = forecast_rows.get((state, division))
     if not rows:
-        return legacy.forecast(state, division, horizon_months)
+        raise HTTPException(status_code=404, detail=f"No forecast is available for {state}/{division}.")
 
     steps = [
         {

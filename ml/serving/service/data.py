@@ -22,7 +22,7 @@ def _query(sql: str, params: list | None = None) -> list:
 def feature_history(state: str, division: str, months_back: int = 15) -> list[dict]:
     """
     The last N months of real CPI, PPI and OPR for one series, oldest first.
-    Used by /trends and by the legacy model.
+    Used by /trends.
     """
     rows = _query(
         f"""

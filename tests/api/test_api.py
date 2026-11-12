@@ -1,12 +1,13 @@
 """Tests for the API (ml/serving). No network: GCS, BigQuery and Gemini are never called."""
 
 import json
+import time
 from types import SimpleNamespace
 
 import api
 import pytest
 from fastapi.testclient import TestClient
-from service import chat, chat_tools, data, forecasts, legacy
+from service import chat, chat_tools, data, forecasts
 from service import llm_log as llm_logging
 
 
@@ -52,41 +53,51 @@ def test_forecast_rejects_bad_input(client, forecast_table, params, fragment):
     assert fragment in r.json()["detail"]
 
 
-def test_forecast_503_when_no_table_and_no_legacy_model(client, monkeypatch):
-    def boom():
-        raise RuntimeError("no GCS in tests")
-    monkeypatch.setattr(legacy, "load_model_from_gcs", boom)
+def test_forecast_503_while_no_table_is_loaded(client):
     r = client.get("/forecast", params={"state": "Selangor", "division": "01"})
     assert r.status_code == 503
+    assert "not available" in r.json()["detail"]
 
 
-def test_forecast_falls_back_to_the_legacy_model_when_the_table_has_no_entry(client, monkeypatch):
-    history = [{"date": f"2025-{m:02d}-01", "cpi_index": 100.0 + m, "ppi_index": 110.0, "opr_rate": 2.75}
-               for m in range(1, 13)] + [{"date": "2026-01-01", "cpi_index": 113.0, "ppi_index": 110.0,
-                                          "opr_rate": 2.75}]
-    monkeypatch.setattr(data, "feature_history", lambda state, division, months_back=15: history)
-    monkeypatch.setattr(legacy, "model", SimpleNamespace(predict=lambda X: [float(X[0][0]) + 1.0]))
-    body = client.get("/forecast", params={"state": "Selangor", "division": "01", "horizon_months": 3}).json()
-    assert body["source"] == "legacy_recursive"
-    # each step feeds on the one before it: 113 -> 114 -> 115 -> 116
-    assert [s["predicted_index"] for s in body["forecast"]] == [114.0, 115.0, 116.0]
-    assert body["latest_real_date"] == "2026-01-01"
+def test_forecast_404_for_a_series_missing_from_the_table(client, forecast_table):
+    r = client.get("/forecast", params={"state": "Perlis", "division": "06"})
+    assert r.status_code == 404
 
 
-def test_startup_survives_a_missing_forecast_table_and_does_not_load_the_legacy_model(monkeypatch):
-    """The legacy model is only downloaded when a fallback forecast is actually asked for."""
+def test_bulk_forecasts_report_a_missing_series_without_failing_the_rest(client, forecast_table):
+    body = client.get("/forecasts", params={"state": "Selangor", "divisions": "01,06"}).json()
+    assert list(body["forecasts"]) == ["01"] and "06" in body["errors"]
+
+
+def test_a_missing_table_is_retried_within_a_minute_not_an_hour(client, monkeypatch):
+    attempts = []
+    monkeypatch.setattr(forecasts, "load_forecast_table", lambda force=False: attempts.append(1))
+    monkeypatch.setattr(forecasts, "_forecast_checked_at", time.time() - 30)
+    forecasts.maybe_refresh_forecast_table()
+    assert attempts == []                                   # checked 30 seconds ago: wait
+    monkeypatch.setattr(forecasts, "_forecast_checked_at", time.time() - 90)
+    forecasts.maybe_refresh_forecast_table()
+    assert attempts == [1]                                  # no table and over a minute: try again
+
+
+def test_a_loaded_table_is_only_rechecked_hourly(client, forecast_table, monkeypatch):
+    attempts = []
+    monkeypatch.setattr(forecasts, "load_forecast_table", lambda force=False: attempts.append(1))
+    monkeypatch.setattr(forecasts, "_forecast_checked_at", time.time() - 90)
+    forecasts.maybe_refresh_forecast_table()
+    assert attempts == []
+
+
+def test_startup_survives_a_missing_forecast_table(monkeypatch):
     def no_table(force=False):
         raise RuntimeError("forecasts/latest.json not found")
-
-    def must_not_run():
-        raise AssertionError("the legacy model was loaded at startup")
     monkeypatch.setattr(forecasts, "load_forecast_table", no_table)
     monkeypatch.setattr(forecasts, "forecast_rows", {})
-    monkeypatch.setattr(legacy, "load_model_from_gcs", must_not_run)
     monkeypatch.setattr(chat, "load_index_from_gcs", lambda: None)
     with TestClient(api.app) as started:
         body = started.get("/health").json()
     assert body["status"] == "ok" and body["forecast_table_loaded"] is False
+    assert "legacy_model_loaded" not in body
 
 
 # ── /forecasts (bulk) ────────────────────────────────────────────────────────

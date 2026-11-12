@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "ml", "serving"))
 
 import api  # noqa: E402
-from service import forecasts, legacy  # noqa: E402
+from service import forecasts  # noqa: E402
 from service import llm_log as llm_logging  # noqa: E402
 from service.config import limiter  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -59,7 +59,6 @@ def client(monkeypatch):
     monkeypatch.setattr(forecasts, "_forecast_checked_at", time.time())
     monkeypatch.setattr(forecasts, "forecast_rows", {})
     monkeypatch.setattr(forecasts, "forecast_meta", {})
-    monkeypatch.setattr(legacy, "model", None)
     monkeypatch.setattr(limiter, "enabled", False)
     monkeypatch.setattr(llm_logging, "LLM_LOG_ENABLED", False)      # never write to BigQuery from tests
     monkeypatch.setattr(llm_logging, "EVAL_LOG_TOKEN", "test-eval-token")
