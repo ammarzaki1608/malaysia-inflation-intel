@@ -7,6 +7,7 @@ DOSM and BNM data.
 """
 
 import json
+import threading
 from html import escape
 
 import httpx
@@ -260,6 +261,9 @@ st.markdown("""
         border-radius: 8px; padding: 16px 20px; margin: 16px 0;
     }
 
+    /* Captions and small print: readable size, 6:1 contrast on white */
+    [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: #5F5E5A; font-size: 0.9rem; }
+
     /* Home */
     .mi-eyebrow { display: inline-block; font-size: 0.82rem; color: #185FA5; background: #E6F1FB;
                   border-radius: 999px; padding: 3px 12px; margin-bottom: 14px; }
@@ -303,6 +307,37 @@ def go_to_page(index: int) -> None:
     set; the menu reads it as its start value on the next run (see render_top_bar).
     """
     st.session_state.page = index
+
+
+CHART_FONT = dict(family="Source Sans Pro, sans-serif", color="#2C2C2A", size=13)
+
+
+def show_chart(fig) -> None:
+    """Every chart goes through here so they share one font, grid and axis style."""
+    fig.update_layout(font=CHART_FONT, hoverlabel=dict(font_size=13))
+    fig.update_xaxes(gridcolor="#ECEAE2", linecolor="#D3D1C7", zerolinecolor="#B4B2A9")
+    fig.update_yaxes(gridcolor="#ECEAE2", linecolor="#D3D1C7", zerolinecolor="#B4B2A9")
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _warm_api() -> None:
+    try:
+        httpx.get(f"{API_URL}/health", timeout=60.0)
+    except Exception:
+        pass            # only a head start: pages make their own requests and report their own errors
+
+
+def warm_api_once() -> None:
+    """
+    Wake the API in the background the first time a session opens the app.
+    It scales to zero, and a cold start takes about 20 seconds; by the time a
+    visitor reaches the calculator or Data page it is up. One cheap request
+    per session, and it never touches Gemini.
+    """
+    if st.session_state.get("api_warm_started"):
+        return
+    st.session_state.api_warm_started = True
+    threading.Thread(target=_warm_api, daemon=True).start()
 
 
 def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
@@ -659,11 +694,15 @@ def _fill_typical_spending(form_key: str) -> None:
         st.session_state.pop(f"{form_key}_spend_{div}", None)
 
 
-def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) -> bool:
+def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str,
+                        quick_label: str | None = None) -> bool:
     """
     State, income, pay rise, horizon and spending in ONE form: nothing reruns
     while typing, and the report only changes when the user presses submit.
     Returns True on the run where the form was submitted (profile already saved).
+    With `quick_label`, a second button fills the spending boxes with the state's
+    average household and submits in one step, for people who don't know their
+    own figures yet.
     """
     en = lang == "en"
     p = get_profile()
@@ -692,6 +731,14 @@ def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) ->
                                index=list(HORIZONS).index(p["horizon"]),
                                format_func=lambda x: f"{x} months" if en else f"{x} bulan",
                                horizontal=True, key=f"{form_key}_horizon")
+
+        quick = False
+        if quick_label:
+            quick = st.form_submit_button(quick_label, on_click=_fill_typical_spending, args=(form_key,),
+                                          use_container_width=True)
+            st.caption("Uses the average household in your state (DOSM, 2024). You can change the amounts afterwards."
+                       if en else
+                       "Menggunakan purata isi rumah di negeri anda (DOSM, 2024). Anda boleh menukar jumlah selepas itu.")
 
         st.markdown(f"**{t['spending_header']}**")
         if prefill:
@@ -722,7 +769,7 @@ def render_profile_form(t: dict, lang: str, form_key: str, submit_label: str) ->
                     step=50, key=f"{form_key}_spend_{div}",
                 )
 
-        submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True)
+        submitted = st.form_submit_button(submit_label, type="primary", use_container_width=True) or quick
 
     if submitted:
         st.session_state.pop(f"{form_key}_prefill", None)
@@ -1233,6 +1280,7 @@ def render_personal_calculator(t: dict, lang: str):
         submitted = render_profile_form(
             t, lang, "calc_form",
             "Calculate my forecast" if en else "Kira unjuran saya",
+            quick_label="Quick estimate with my state's average" if en else "Anggaran pantas dengan purata negeri saya",
         )
 
     p = get_profile()
@@ -1446,14 +1494,14 @@ def render_personal_calculator(t: dict, lang: str):
 
     for div, cat_data in sorted_cats[:4]:
         fig = render_forecast_chart(cat_data["forecast_raw"], cat_data["category_name"], base_amount_rm=cat_data["current_rm"])
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     if len(sorted_cats) > 4:
         more_text = f"Show {len(sorted_cats) - 4} more categories" if lang == "en" else f"Papar {len(sorted_cats) - 4} kategori lagi"
         with st.expander(more_text):
             for div, cat_data in sorted_cats[4:]:
                 fig = render_forecast_chart(cat_data["forecast_raw"], cat_data["category_name"], base_amount_rm=cat_data["current_rm"])
-                st.plotly_chart(fig, use_container_width=True)
+                show_chart(fig)
 
     st.divider()
     st.subheader(t["full_breakdown_header"])
@@ -2036,7 +2084,7 @@ def render_relocation_planner(t: dict, lang: str):
             plot_bgcolor="rgba(0,0,0,0)",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        show_chart(fig)
 
     if len(sorted_comparisons) > 4:
         with st.expander(show_more_text.format(n=len(sorted_comparisons) - 4)):
@@ -2062,7 +2110,7 @@ def render_relocation_planner(t: dict, lang: str):
                     plot_bgcolor="rgba(0,0,0,0)",
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                show_chart(fig)
     st.caption(disclaimer_text)
 
 def render_data_explorer(t, lang):
@@ -2098,7 +2146,7 @@ def render_data_explorer(t, lang):
     if leaderboard_data:
         cat_names = [c["category_name"] for c in leaderboard_data["categories"]]
         cat_values = [c["yoy_change_pct"] for c in leaderboard_data["categories"]]
-        cat_colors = ["#dc2626" if v > 0 else "#16a34a" for v in cat_values]
+        cat_colors = ["#A32D2D" if v > 0 else "#3B6D11" for v in cat_values]
 
         fig_leaderboard = go.Figure(go.Bar(
             x=cat_values, y=cat_names, orientation="h",
@@ -2112,7 +2160,7 @@ def render_data_explorer(t, lang):
             xaxis_title="Year-on-year change (%)" if lang == "en" else "Perubahan tahun ke tahun (%)",
             yaxis={"autorange": "reversed"},
         )
-        st.plotly_chart(fig_leaderboard, use_container_width=True)
+        show_chart(fig_leaderboard)
 
     st.divider()
 
@@ -2146,7 +2194,7 @@ def render_data_explorer(t, lang):
             xaxis_title="Price change, past 12 months (%)" if lang == "en" else "Perubahan harga, 12 bulan lalu (%)",
             yaxis={"autorange": "reversed"},
         )
-        st.plotly_chart(fig_state_lb, use_container_width=True)
+        show_chart(fig_state_lb)
         st.caption(
             f"Your state ({state}) highlighted in blue."
             if lang == "en" else
@@ -2256,7 +2304,7 @@ def render_data_explorer(t, lang):
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig_cpi, use_container_width=True)
+    show_chart(fig_cpi)
     st.caption(
         "Dashed markers: verified policy events (SST rate increase, 1 March 2024; targeted diesel subsidy, 10 June 2024 — Ministry of Finance Malaysia)."
         if lang == "en" else
@@ -2287,7 +2335,7 @@ def render_data_explorer(t, lang):
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig_ppi, use_container_width=True)
+    show_chart(fig_ppi)
 
     st.divider()
 
@@ -2315,7 +2363,7 @@ def render_data_explorer(t, lang):
         yaxis2=dict(title="Base rate (%)", overlaying="y", side="right"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    st.plotly_chart(fig_opr, use_container_width=True)
+    show_chart(fig_opr)
 
     st.divider()
 
@@ -2340,6 +2388,7 @@ def render_data_explorer(t, lang):
 
 # ── main entry point ──────────────────────────────────────────────────────────
 def main():
+    warm_api_once()
     mode, t, lang = render_top_bar()
     get_profile()   # load any saved profile from the URL on the first run
 
