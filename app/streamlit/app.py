@@ -6,7 +6,9 @@ and helps Malaysians plan relocation decisions using official
 DOSM and BNM data.
 """
 
+import functools
 import json
+from html import escape
 
 import httpx
 import streamlit as st
@@ -18,6 +20,7 @@ import copy
 import os
 
 from budget import rank_pressure, cumulative_extra, salary_check, what_if_savings
+from ui_logic import insight_signature, month_label, saved_insight
 from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
                           encode_profile, typical_spending, typical_total)
 
@@ -221,20 +224,30 @@ st.markdown("""
     /* One palette: navy for brand and actions, warm greys for everything else,
        red only where something is rising. (Also set in .streamlit/config.toml.) */
     [data-testid="stDecoration"] { display: none; }
-    .block-container { padding-top: 2rem; max-width: 1100px; }
+    /* Streamlit's fixed header is about 3.75rem tall: start the page below it, or it
+       covers the top of the menu pills. */
+    .block-container { padding-top: 4.5rem; }
     h1, h2, h3, h4 { color: #2C2C2A; font-weight: 600; letter-spacing: -0.01em; }
     h1 { font-size: 1.9rem; }
 
-    /* Radio groups (page menu, language, horizon) shown as segmented pills */
+    /* Radio groups (page menu, language, horizon) shown as segmented pills. */
     div[role="radiogroup"] { gap: 6px; flex-wrap: wrap; }
     div[role="radiogroup"] > label {
         background: #FFFFFF; border: 1px solid #D3D1C7; border-radius: 8px;
-        padding: 5px 12px; margin: 0; cursor: pointer;
+        padding: 5px 12px; margin: 0; cursor: pointer; position: relative;
     }
-    div[role="radiogroup"] > label > div:first-child { display: none; }
     div[role="radiogroup"] > label p { font-size: 0.9rem; color: #5F5E5A; margin: 0; }
-    div[role="radiogroup"] > label:has(input:checked) { background: #E6F1FB; border-color: #0C447C; }
-    div[role="radiogroup"] > label:has(input:checked) p { color: #0C447C; font-weight: 600; }
+    div[role="radiogroup"] > label:focus-within { outline: 2px solid #0C447C; outline-offset: 2px; }
+    /* Only where :has() is supported (it marks the selected pill). Elsewhere the
+       normal radio circle stays visible, so the selection is never hidden. The
+       circle is hidden visually but kept focusable, so the keyboard still works. */
+    @supports selector(:has(*)) {
+        div[role="radiogroup"] > label > div:first-child {
+            position: absolute; opacity: 0; width: 1px; height: 1px; overflow: hidden; pointer-events: none;
+        }
+        div[role="radiogroup"] > label:has(input:checked) { background: #E6F1FB; border-color: #0C447C; }
+        div[role="radiogroup"] > label:has(input:checked) p { color: #0C447C; font-weight: 600; }
+    }
 
     .metric-card {
         background: #F1EFE8; border-radius: 12px; padding: 20px;
@@ -290,19 +303,6 @@ def go_to_page(index: int, lang: str) -> None:
     st.session_state[f"mode_select_{lang}"] = index
 
 
-MONTHS_MS = ["Jan", "Feb", "Mac", "Apr", "Mei", "Jun", "Jul", "Ogos", "Sep", "Okt", "Nov", "Dis"]
-MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-
-def month_label(iso_date: str, lang: str) -> str:
-    """'2026-09-01' -> 'Sep 2026'."""
-    try:
-        year, month = int(iso_date[:4]), int(iso_date[5:7])
-        return f"{(MONTHS_EN if lang == 'en' else MONTHS_MS)[month - 1]} {year}"
-    except (ValueError, IndexError, TypeError):
-        return ""
-
-
 def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
     """
     The AI budgeting suggestion, generated only when the user asks for it.
@@ -311,12 +311,10 @@ def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
     """
     en = lang == "en"
     key = f"insight_{context_type}"
-    signature = json.dumps(summary_data, sort_keys=True, default=str)
-    saved = st.session_state.get(key)
-    if saved and saved["signature"] != signature:
-        saved = None
+    signature = insight_signature(summary_data)
+    suggestion = saved_insight(st.session_state.get(key), signature)
 
-    if saved is None:
+    if suggestion is None:
         with st.container(border=True):
             left, right = st.columns([3, 1])
             with left:
@@ -343,7 +341,7 @@ def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
             "Dijana oleh AI (Google Gemini) berdasarkan angka anda. Panduan umum, bukan nasihat kewangan.")
     st.markdown(f"""
     <div class='mi-insight'>
-        <b>{label}</b><br><br>{saved["text"]}
+        <b>{label}</b><br><br>{escape(suggestion)}
         <div class='mi-ai'>{note}</div>
     </div>
     """, unsafe_allow_html=True)
@@ -355,7 +353,39 @@ def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
 LOADING_TEXT = "Loading data… / Memuatkan data…"
 
 
-@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
+class _NotCached(Exception):
+    """Carries a failed call's result past st.cache_data, which would otherwise keep it."""
+
+    def __init__(self, result):
+        self.result = result
+
+
+def cache_successes(ttl: int, show_spinner=LOADING_TEXT):
+    """
+    st.cache_data for API calls that return None (or an empty result) when they
+    fail. Plain st.cache_data would remember that failure for the whole ttl: one
+    timeout while the API was starting up hid its data for an hour. Here only
+    successful results are kept, so the next visit tries again.
+    """
+    def decorate(fn):
+        @st.cache_data(ttl=ttl, show_spinner=show_spinner)
+        def cached(*args, **kwargs):
+            result = fn(*args, **kwargs)
+            if not result:
+                raise _NotCached(result)      # exceptions are never cached
+            return result
+
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            try:
+                return cached(*args, **kwargs)
+            except _NotCached as failed:
+                return failed.result
+        return call
+    return decorate
+
+
+@cache_successes(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecasts(state: str, divisions: tuple, horizon_months: int) -> dict:
     """
     All requested categories for one state in a single API call ({division: result}).
@@ -396,7 +426,7 @@ def forecast_base_index(forecast_list: list) -> float:
     return first.get("base_index") or first["predicted_index"]
 
 
-@st.cache_data(ttl=300, show_spinner=LOADING_TEXT)
+@cache_successes(ttl=300, show_spinner=LOADING_TEXT)
 def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
     """
     Call the FastAPI /forecast endpoint for a 1–12 month forecast
@@ -421,7 +451,7 @@ def fetch_forecast(state: str, division: str, horizon_months: int) -> dict:
         st.error(f"API error: {e}")
         return None
     
-@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
+@cache_successes(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_headline_inflation() -> dict:
     """
     Get the current national headline CPI year-on-year change.
@@ -435,7 +465,7 @@ def fetch_headline_inflation() -> dict:
         print(f"[WARNING] fetch_headline_inflation failed: {e}")
         return None
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@cache_successes(ttl=3600, show_spinner=False)
 def fetch_trends(state: str, division: str, months_back: int = 60) -> dict:
     """Get raw historical CPI/PPR/OPR time series for charting."""
     try:
@@ -450,7 +480,7 @@ def fetch_trends(state: str, division: str, months_back: int = 60) -> dict:
         print(f"[WARNING] fetch_trends failed: {e}")
         return None
     
-@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
+@cache_successes(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_income_snapshot(state: str) -> dict:
     """Get the HIES 2022 income/expenditure snapshot for one state."""
     try:
@@ -500,7 +530,7 @@ def fetch_prescriptive_insight(context_type: str, summary_data: dict) -> dict:
         print(f"[WARNING] fetch_prescriptive_insight failed: {e}")
         return None
     
-@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
+@cache_successes(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_category_leaderboard() -> dict:
     try:
         response = httpx.get(f"{API_URL}/category-leaderboard", timeout=15.0)
@@ -511,7 +541,7 @@ def fetch_category_leaderboard() -> dict:
         return None
 
 
-@st.cache_data(ttl=3600, show_spinner=LOADING_TEXT)
+@cache_successes(ttl=3600, show_spinner=LOADING_TEXT)
 def fetch_state_leaderboard(division: str) -> dict:
     try:
         response = httpx.get(f"{API_URL}/state-leaderboard", params={"division": division}, timeout=15.0)
@@ -749,8 +779,6 @@ def render_home(t, lang):
     """Landing page — explains what the app does and how to use it."""
 
     if lang == "en":
-        hero_title = "Malaysia Personal Inflation Intelligence"
-        hero_sub = "The government publishes one inflation number for the whole country. But your inflation depends on how you actually spend your money. This tool calculates yours."
         section1_title = "What is personal inflation?"
         section1_body = (
             "Malaysia's official CPI is calculated using a fixed national basket — "
@@ -766,10 +794,9 @@ def render_home(t, lang):
         card2_title = "Relocation Planner"
         card2_body = "Thinking of moving to KL, Johor, or another state? We start from how much the average household spends in each state (DOSM HIES 2022), let you adjust every amount, forecast both side by side in ringgit, and estimate the salary you'd need to keep your standard of living."
         card2_best = "Best for: evaluating a job offer in another state."
-        cta_text = "Choose a page from the menu at the top to get started."
         ready_text = "Ready to find out your personal inflation rate?"
         step1_title = "Pick your mode"
-        step1_body = "Choose Personal Inflation Calculator or Relocation Planner from the menu at the top."
+        step1_body = "Choose Calculator or Relocation from the menu at the top."
         step2_title = "Enter your real numbers"
         step2_body = "Type in your monthly salary and how much you actually spend per category in ringgit — no percentages, no guesswork. Pick how far ahead you want to forecast: 3, 6, or 12 months."
         step3_title = "Read your results"
@@ -790,8 +817,6 @@ def render_home(t, lang):
         - This is an **independent research project** — not affiliated with DOSM, BNM, or any government agency.
         """
     else:
-        hero_title = "Maklumat Inflasi Peribadi Malaysia"
-        hero_sub = "Kerajaan menerbitkan satu angka inflasi untuk seluruh negara. Namun, inflasi anda bergantung kepada cara sebenar anda berbelanja. Alat ini mengira kadar inflasi peribadi anda."
         section1_title = "Apakah itu inflasi peribadi?"
         section1_body = (
             "CPI rasmi Malaysia dikira menggunakan 'bakul' tetap kebangsaan — "
@@ -807,10 +832,9 @@ def render_home(t, lang):
         card2_title = "Perancang Perpindahan"
         card2_body = "Sedang mempertimbangkan untuk berpindah ke Kuala Lumpur, Johor, atau negeri lain? Kami bermula dengan purata perbelanjaan isi rumah di setiap negeri (HIES DOSM 2022), membenarkan anda melaraskan setiap jumlah, memaparkan unjuran perbandingan dalam unit Ringgit, dan menganggarkan gaji yang diperlukan untuk mengekalkan taraf hidup anda."
         card2_best = "Sesuai untuk: Menilai tawaran pekerjaan di negeri lain."
-        cta_text = "Pilih halaman daripada menu di bahagian atas untuk bermula."
         ready_text = "Sedia untuk mengetahui kadar inflasi peribadi anda?"
         step1_title = "Pilih mod anda"
-        step1_body = "Pilih Kalkulator Inflasi Peribadi atau Perancang Perpindahan daripada menu di bahagian atas."
+        step1_body = "Pilih Kalkulator atau Perpindahan daripada menu di bahagian atas."
         step2_title = "Masukkan angka sebenar anda"
         step2_body = "Masukkan gaji bulanan dan perbelanjaan sebenar anda mengikut kategori dalam unit Ringgit — tiada peratusan atau anggaran diperlukan. Pilih tempoh unjuran yang anda inginkan: 3, 6, atau 12 bulan."
         step3_title = "Semak keputusan anda"
@@ -853,17 +877,18 @@ def render_home(t, lang):
             model_title="Model ramalan"),
     }[lang]
 
-    headline_data = fetch_headline_inflation()
-    eyebrow = ""
-    if headline_data and headline_data.get("headline_inflation_pct") is not None:
-        eyebrow = "<div class='mi-eyebrow'>" + H["official"].format(
-            month=month_label(headline_data.get("latest_date", ""), lang),
-            pct=f"{headline_data['headline_inflation_pct']:.1f}") + "</div>"
+    # Home is a reading page: keep its lines a comfortable length on wide screens.
+    st.markdown("<style>.block-container { max-width: 1100px; }</style>", unsafe_allow_html=True)
 
     left, right = st.columns([1.15, 1], gap="large")
     with left:
+        # Held open now and filled in at the end of this function: the official
+        # figure needs the API, which may be starting up, and nothing above the
+        # fold should wait for it.
+        eyebrow_slot = st.empty()
+        eyebrow_slot.markdown("<div style='height:2.4rem'></div>", unsafe_allow_html=True)
         # one unindented block with no blank lines: markdown would read either as code
-        st.markdown(f"<div class='mi-hero'>{eyebrow}<h1>{H['headline']}</h1><p>{H['sub']}</p></div>",
+        st.markdown(f"<div class='mi-hero'><h1>{H['headline']}</h1><p>{H['sub']}</p></div>",
                     unsafe_allow_html=True)
         st.button(H["cta"], type="primary", key="hero_cta", on_click=go_to_page, args=(2, lang))
     with right:
@@ -939,6 +964,17 @@ def render_home(t, lang):
     with middle:
         st.button(H["cta"], type="primary", key="closing_cta", on_click=go_to_page, args=(2, lang),
                   use_container_width=True)
+
+    # ── official inflation line, last (see eyebrow_slot above) ───────────────
+    headline_data = fetch_headline_inflation()
+    month = month_label((headline_data or {}).get("latest_date"), lang)
+    pct = (headline_data or {}).get("headline_inflation_pct")
+    if month and pct is not None:
+        eyebrow_slot.markdown(
+            "<div class='mi-eyebrow'>" + H["official"].format(month=month, pct=f"{pct:.1f}") + "</div>",
+            unsafe_allow_html=True)
+    else:
+        eyebrow_slot.empty()
 
 
 def calculate_budget_forecast(
