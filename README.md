@@ -199,7 +199,7 @@ How to read this: the two retrieval rows are exact counts and the most trustwort
 | Automation | Cloud Scheduler, Cloud Run Jobs |
 | Deployment | Docker, Cloud Run, Artifact Registry |
 | CI/CD | GitHub Actions |
-| Auth | GCP Service Accounts, IAM (least-privilege), Secret Manager |
+| Auth | Workload Identity Federation (keyless CI), one service account per job, Secret Manager |
 
 ---
 
@@ -406,7 +406,17 @@ terraform apply -var="alert_email=you@example.com"   # emails you if the monthly
 
 All three images use **fully pinned** requirements (every transitive dependency), and every pull request builds and smoke-tests them (`.github/workflows/pr-build.yml`). An unpinned rebuild once broke the Streamlit app (pyarrow vs NumPy). The pinned pipeline environment was also how a missing `scikit-learn` in the pipeline image was caught.
 
-Requires `GCP_SA_KEY` secret set in GitHub repository settings.
+**Access.** GitHub Actions signs in to Google Cloud without a stored key (Workload Identity Federation): GitHub issues a short-lived token for each run, and Google accepts it only from this repository's `main` branch. Each identity has one job and only the access that job needs:
+
+| Identity | Used by | Can |
+|---|---|---|
+| `github-deployer` | GitHub Actions | push images to one repository, deploy revisions, update the pipeline job |
+| `vertex-sa` | API | read the ML artifacts bucket and BigQuery, write the LLM log table, read two secrets |
+| `streamlit-app-sa` | Streamlit app | nothing: it only calls the API over HTTPS |
+| `ingestion-sa` | monthly pipeline job | write two buckets, load and transform BigQuery data |
+| `pipeline-scheduler-sa` | Cloud Scheduler | start the one pipeline job |
+
+All of it is defined in `infra/terraform/iam.tf`.
 
 ---
 

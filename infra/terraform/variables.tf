@@ -15,6 +15,12 @@ variable "environment" {
   default     = "dev"
 }
 
+variable "github_repository" {
+  description = "The GitHub repository (owner/name) whose workflows may deploy."
+  type        = string
+  default     = "ammarzaki1608/malaysia-inflation-intel"
+}
+
 variable "alert_email" {
   description = "Email address notified when the monthly pipeline job fails. Leave empty to skip creating alerts."
   type        = string
