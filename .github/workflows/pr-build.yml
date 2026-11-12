@@ -24,7 +24,7 @@ jobs:
           python-version: "3.12"
       - name: Run app unit tests (standard library only)
         working-directory: app/streamlit
-        run: python -m unittest -v test_budget test_user_profile
+        run: python -m unittest -v test_budget test_user_profile test_ui_logic
 
   build:
     name: Build ${{ matrix.name }}
