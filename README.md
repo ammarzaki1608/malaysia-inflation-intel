@@ -1,13 +1,27 @@
 # Malaysia Personal Inflation Intelligence
 
-> A production data science system that ingests official Malaysian government data monthly, forecasts CPI inflation by state and category using XGBoost, and serves a bilingual, citizen-facing app where Malaysians can calculate their **personal inflation rate**, plan relocation decisions, explore real historical trends, and ask questions in plain language — grounded in a retrieval-augmented generation (RAG) layer.
+**Official inflation is one national number. Yours depends on what you spend.** This system forecasts Malaysian CPI by state and category from official DOSM and BNM data, refreshes itself every month, and turns it into a personal forecast in ringgit, in English and Bahasa Malaysia.
 
-**Live App:** [inflation-app-lxxpkjdxja-as.a.run.app](https://inflation-app-lxxpkjdxja-as.a.run.app)
-**API Docs:** [inflation-api-lxxpkjdxja-as.a.run.app/docs](https://inflation-api-lxxpkjdxja-as.a.run.app/docs)
+[**Live app**](https://inflation-app-lxxpkjdxja-as.a.run.app) · [API docs](https://inflation-api-lxxpkjdxja-as.a.run.app/docs) · [Case study: my model was 97% accurate, until I tested it properly](docs/case-study.md)
 
-Available in **English** and **Bahasa Malaysia**.
+<p align="center">
+  <img src="docs/images/home.jpg" width="49%" alt="Home page: the headline, the live official inflation figure and a comparison of three households">
+  <img src="docs/images/calculator.jpg" width="49%" alt="Calculator report: extra spending needed, biggest pressure on the budget and the category rising slowest">
+</p>
+<table align="center">
+  <tr>
+    <td><img src="docs/images/data-explorer.jpg" width="520" alt="Data explorer: year-on-year change by spending category"></td>
+    <td><img src="docs/images/phone.jpg" width="190" alt="The home page on a phone"></td>
+  </tr>
+</table>
 
----
+## Highlights
+
+- **Forecasts that were tested honestly.** The first model reported 97% directional accuracy. A rolling-origin backtest showed that was leakage, and the model lost to "prices stay the same" at every horizon (up to 2.2 times the error at one month). The redesigned ETS + XGBoost average beats that baseline by 6% at 6 and 12 months (10 to 21% at 3 to 12 months since 2022), and its 80% ranges held 81% of the time out of sample. Every forecast the system publishes is later scored against what actually happened, live at `/forecast-accuracy`.
+- **A monthly pipeline that runs itself.** Cloud Scheduler starts a Cloud Run Job: ingest DOSM and BNM data, build it with dbt (23 data tests), train, calibrate, publish. The infrastructure is defined in Terraform.
+- **A chatbot that fetches numbers instead of guessing.** Retrieval over a curated knowledge base, plus four forecast tools the model can call. Evaluated on 30 questions in three layers: retrieval, tool choice, and judged answer quality. [How it works](docs/chatbot.md)
+- **Privacy as a design decision.** I first logged every chat question, then removed it. Only my own evaluation runs are recorded; users' questions and answers are never stored.
+- **Production habits.** Keyless CI sign-in (Workload Identity Federation), one least-privilege service account per job, about 160 fast tests and a linter on every pull request, pinned container images, rate limits and a budget alert.
 
 ## The Problem
 
@@ -17,118 +31,13 @@ Malaysia's official CPI is a single national average. A person in Kelantan spend
 
 ## What It Does
 
-**📊 Personal Budget Forecast** — enter your salary and real spending in ringgit per category. See your **personal inflation over the past 12 months** next to the official rate over the same period (like-for-like). Then see a 3/6/12-month forecast per category with backtest-calibrated 80% ranges, plus an AI-generated general budgeting suggestion grounded in your own numbers.
+**Personal budget forecast.** Enter your salary and what you really spend per category, in ringgit. You get your **personal inflation over the past 12 months** next to the official rate over the same period (like-for-like), then a 3, 6 or 12-month forecast per category with backtest-calibrated 80% ranges. A "Quick estimate" button starts from your state's average household, so a first result takes two clicks. An AI-written budgeting suggestion is available on request, grounded in your own numbers.
 
-**🗺️ Relocation Planner** — compare cost of living between any two Malaysian states. Destination spending starts from the difference in average household spending (DOSM HIES 2022) and is fully editable. Each state's prices are then forecast forward, with a salary-needed estimate and the same AI-generated insight layer. (It deliberately doesn't divide one state's CPI index by another's: index levels measure change since a base period, not how expensive a state is.)
+**Relocation planner.** Compare the cost of living between any two Malaysian states. Destination spending starts from the difference in average household spending (DOSM HIES 2022) and is fully editable. Each state's prices are then forecast forward, with a salary-needed estimate. (It deliberately doesn't divide one state's CPI index by another's: index levels measure change since a base period, not how expensive a state is.)
 
-**📈 Data Explorer** — a national overview (headline inflation, category leaderboard, state leaderboard) before drilling into historical CPI/PPI/OPR trends for any state and category, with hover-annotated real policy events (e.g. the 2024 SST rate increase, the 2024 targeted diesel subsidy).
+**Data explorer.** A national overview (headline inflation, category leaderboard, state leaderboard), then historical CPI, PPI and interest-rate trends for any state and category, with real policy events marked (for example the 2024 SST increase and the 2024 targeted diesel subsidy).
 
-**💬 Ask Anything** — a chat interface embedded in both forecast pages. Answers general questions about how the app works or personal questions about your own forecast, grounded in a retrieval-augmented knowledge base — never inventing numbers, and fetching live forecast data only when a question actually needs it.
-
----
-
-## Architecture
-
-```
-data.gov.my / OpenDOSM
-        │
-        ▼
-[ingestion/ingest.py]  ←── Python, requests, pandas
-        │  Download parquet → validate → upload to GCS → load to BigQuery (WRITE_TRUNCATE)
-        ▼
-[GCS raw bucket]  ←── Versioned + latest copies of every raw file
-        │
-        ▼
-[BigQuery raw dataset]  ←── Exact DOSM/BNM schema, no transformation
-        │
-        ▼
-[dbt transform layer]  ←── 7 staging views + 2 mart tables, 23 data quality tests
-        │  Staging: type casting, null filtering, income band classification
-        │  Mart: lag features (1/3/6/12mo), rolling averages (3/12mo), PPI leads, OPR
-        ▼
-[BigQuery mart dataset]  ←── mart_cpi_features (43,900+ rows), mart_income_bands
-        │
-        ├──────────────────────────────────────────────┐
-        ▼                                              ▼
-[ml/training/forecast_batch.py]           [Cloud Scheduler]
-  ETS + direct-growth XGBoost average,       (cron: 3rd of every month)
-  80% ranges from backtest errors                   │
-  forecasts/latest.json saved to GCS                ▼
-        │                              [Cloud Run Job: inflation-data-pipeline]
-        │                                (ingest.py → dbt run → dbt test → forecast_batch.py)
-        ▼
-[ml/serving/api.py]  ←── FastAPI, forecast table + FAISS index loaded from GCS (table re-checked hourly)
-        │  /forecast, /forecasts — 3/6/12-month CPI forecast with 80% range (one or many categories)
-        │  /trends              — historical CPI/PPI/OPR time series
-        │  /category-leaderboard, /state-leaderboard — national/state rankings
-        │  /forecast-accuracy   — live track record of published forecasts
-        │  /ask                 — RAG-grounded Q&A (Gemini + FAISS)
-        │  /prescriptive-insight — AI-generated general budgeting suggestion
-        ▼
-[app/streamlit/app.py]  ←── Bilingual (EN/BM) citizen-facing app, Plotly charts
-        │
-        ▼
-[Cloud Run]  ←── Both services containerised with Docker, deployed via Terraform + GitHub Actions
-```
-
----
-
-## The RAG Layer
-
-```
-Knowledge base (27 hand-curated entries)
-        │  embedded once via gemini-embedding-001 (RETRIEVAL_DOCUMENT)
-        ▼
-FAISS flat L2 index  ←── stored in GCS, loaded once at API startup
-        │
-        │  live question ──► embedded via gemini-embedding-001 (RETRIEVAL_QUERY)
-        ▼
-Top-k retrieval  (always)
-        ▼
-gemini-3.1-flash-lite  ←── temperature 0.3, strict "never invent facts" system instruction
-        │  ▲
-        │  │  tool calls, when the question needs numbers (at most 2 rounds):
-        ▼  │  get_forecast · rank_categories · rank_states · get_forecast_accuracy
-Forecast table and scorecard already in memory
-        ▼
-Grounded answer, with the retrieved entries and every tool result returned for traceability
-```
-
-**Tool calling.** The model decides for itself whether a question needs data. It is given four tools (plain Python functions in `service/chat_tools.py`) and replies either with an answer or with a request such as `get_forecast(state="Kedah", category="Transport", horizon_months=6)`. The API runs the function, sends the result back, and the model writes its answer from it.
-
-This replaced a keyword list that guessed whether a question was about "my forecast", and could only ever supply the one forecast open in the app. The chatbot can now answer questions the old version could not: "Is transport rising faster in Selangor or Johor?", "Which category will rise most in Kedah?", "How have the forecasts performed so far?".
-
-| Decision | Reason |
-|---|---|
-| Plain Gemini function calling, no agent framework | Under 300 lines including the tools, no new dependency, every step visible in one function |
-| Retrieval stays automatic; only data is a tool | A general question still costs one model call, as before. Only questions that need numbers pay for a second |
-| Tools read the forecast table in memory | A tool call takes milliseconds and no database query |
-| Hard limits: 2 rounds, 6 tool calls | On the last round the model is not allowed to ask for tools, so the loop always ends |
-| Tools never raise | A bad argument comes back to the model as an error message listing the valid values, so it can correct itself or tell the user |
-| Every argument is validated | States and categories are checked against the known lists before anything is looked up |
-
-The cost: a question that needs data now takes two model calls, so roughly twice the time and tokens of a general question.
-
-**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 30-question test set (23 English, 7 Bahasa Malaysia; 3 out-of-scope; 8 that need forecast data) in three layers.
-
-Retrieval, with no LLM involved: each question lists the knowledge-base entries that hold its answer.
-- **hit rate**: was one of them among the entries retrieved?
-- **MRR**: how near the top was it?
-
-Tool choice, also with no LLM: questions are marked with the tools that would answer them, or with "none" for general questions.
-- **tool choice accuracy**: did the chatbot call an acceptable tool, and leave the tools alone when the question needed no data?
-
-Answer quality, with one judge call per question returning all metrics as JSON:
-- **faithfulness**: no facts beyond the retrieved context
-- **answer relevancy**
-- **context precision**
-- **correctness** against the expected answer
-- for the 8 data questions, whose right answer changes every month, the judge is shown what the tools returned and scores **faithfulness** and **relevancy** only: do the answer's numbers match the data?
-- **refusal**: for out-of-scope questions, such as an exact future inflation figure or a fund recommendation, the bot must decline rather than invent
-
-A judge reply that cannot be parsed is retried once and then reported as unscored, never counted as zero; if too few questions are scored (a Gemini outage), the run is reported as incomplete, not as a pass or a fail.
-
-It runs in CI against the live API on demand (its own workflow, `rag-eval.yml`, started from the Actions tab) and fails if any judge metric averages below 0.7, the retrieval hit rate falls below 0.8, or tool choice accuracy falls below 0.7. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. It is deliberately not run on every merge: a run makes about 60 to 100 Gemini requests on the same key as the live chatbot, and a day of automatic runs once used up the daily quota and took the chatbot down for users. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
+**Ask anything.** A chat box on the forecast pages. It answers how the app works from a retrieval knowledge base, and fetches live forecast numbers with tools when a question needs them. It never invents figures, and what people type is not stored.
 
 ---
 
@@ -184,6 +93,119 @@ How to read this: the two retrieval rows are exact counts and the most trustwort
 
 ---
 
+## Architecture
+
+```
+data.gov.my / OpenDOSM
+        │
+        ▼
+[ingestion/ingest.py]  ←── Python, requests, pandas
+        │  Download parquet → validate → upload to GCS → load to BigQuery (WRITE_TRUNCATE)
+        ▼
+[GCS raw bucket]  ←── Versioned + latest copies of every raw file
+        │
+        ▼
+[BigQuery raw dataset]  ←── Exact DOSM/BNM schema, no transformation
+        │
+        ▼
+[dbt transform layer]  ←── 7 staging views + 2 mart tables, 23 data quality tests
+        │  Staging: type casting, null filtering, income band classification
+        │  Mart: lag features (1/3/6/12mo), rolling averages (3/12mo), PPI leads, OPR
+        ▼
+[BigQuery mart dataset]  ←── mart_cpi_features (43,900+ rows), mart_income_bands
+        │
+        ├──────────────────────────────────────────────┐
+        ▼                                              ▼
+[ml/training/forecast_batch.py]           [Cloud Scheduler]
+  ETS + direct-growth XGBoost average,       (cron: 3rd of every month)
+  80% ranges from backtest errors                   │
+  forecasts/latest.json saved to GCS                ▼
+        │                              [Cloud Run Job: inflation-data-pipeline]
+        │                                (ingest.py → dbt run → dbt test → forecast_batch.py)
+        ▼
+[ml/serving/api.py]  ←── FastAPI, forecast table + FAISS index loaded from GCS (table re-checked hourly)
+        │  /forecast, /forecasts — 3/6/12-month CPI forecast with 80% range (one or many categories)
+        │  /trends              — historical CPI/PPI/OPR time series
+        │  /category-leaderboard, /state-leaderboard — national/state rankings
+        │  /forecast-accuracy   — live track record of published forecasts
+        │  /ask                 — RAG-grounded Q&A (Gemini + FAISS)
+        │  /prescriptive-insight — AI-generated general budgeting suggestion
+        ▼
+[app/streamlit/app.py]  ←── Bilingual (EN/BM) citizen-facing app, Plotly charts
+        │
+        ▼
+[Cloud Run]  ←── Both services containerised with Docker, deployed via Terraform + GitHub Actions
+```
+
+---
+
+## Engineering
+
+### The chatbot
+
+`/ask` retrieves from a 27-entry knowledge base on every question, then lets the model call one of four tools (`get_forecast`, `rank_categories`, `rank_states`, `get_forecast_accuracy`) when it needs forecast numbers. Plain Gemini function calling, no agent framework: capped at 2 rounds and 6 tool calls, tools never raise, and every argument is validated. It is scored by a custom Gemini-based judge harness that runs on demand, because a run uses about 60 to 100 requests on the key the live chatbot shares. Full design, evaluation method and the decisions behind it: **[docs/chatbot.md](docs/chatbot.md)**.
+
+### Tests
+
+```bash
+pip install pytest ruff
+pytest -m "not slow"      # API + forecasting unit tests, a few seconds
+pytest                    # also trains real models on synthetic data (~2 min)
+ruff check .
+cd app/streamlit && python -m unittest test_budget test_user_profile test_ui_logic test_api_cache test_navigation
+```
+
+- `tests/api/` exercises every API endpoint's validation, the precomputed-forecast lookups, the scorecard, the chatbot's tool loop and the logging rules. Retrieval and Gemini are faked, so no key or GCP access is needed.
+- `tests/evaluation/` checks the chatbot evaluation harness itself: judge-reply parsing, retrieval and tool-choice metrics, the pass / fail / incomplete verdict, and that every test question points at a knowledge-base entry that exists.
+- `tests/training/` covers the forecast ranges, the live scorecard arithmetic, the baseline forecasters, the backtest metrics, and the moving-average leak that the original model had. Two slow tests train real models: the **leakage self-test** (multiply all data after the forecast date by 50; no forecast may change) and an end-to-end run of the monthly batch.
+- `app/streamlit/test_*.py` covers the budget maths, saved profiles, the cache wrapper, and navigation. The navigation tests run the whole app through Streamlit's own test tool and exist because two real bugs (a cache-key collision and a page reset on deep links) got past manual checks.
+
+All of this runs on every pull request (`.github/workflows/`) with the same pinned requirements as the production images.
+
+### Deployment
+
+Infrastructure is fully defined in Terraform, including Secret Manager-backed API keys and the automated monthly pipeline. CI/CD via GitHub Actions runs automatically on push to `main` when `ml/serving/` or `app/streamlit/` files change, and dynamically fetches each service's real deployed URL rather than guessing it — self-correcting if Cloud Run's URL format ever changes.
+
+```bash
+cd infra/terraform
+terraform apply -var="alert_email=you@example.com"   # emails you if the monthly pipeline fails
+```
+
+All three images use **fully pinned** requirements (every transitive dependency), and every pull request builds and smoke-tests them (`.github/workflows/pr-build.yml`). An unpinned rebuild once broke the Streamlit app (pyarrow vs NumPy). The pinned pipeline environment was also how a missing `scikit-learn` in the pipeline image was caught.
+
+### Security and access
+
+**Access.** GitHub Actions signs in to Google Cloud without a stored key (Workload Identity Federation): GitHub issues a short-lived token for each run, and Google accepts it only from this repository's `main` branch. Each identity has one job and only the access that job needs:
+
+| Identity | Used by | Can |
+|---|---|---|
+| `github-deployer` | GitHub Actions | push images to one repository, deploy revisions, update the pipeline job |
+| `vertex-sa` | API | read the ML artifacts bucket and BigQuery, write the LLM log table, read two secrets |
+| `streamlit-app-sa` | Streamlit app | nothing: it only calls the API over HTTPS |
+| `ingestion-sa` | monthly pipeline job | write two buckets, load and transform BigQuery data |
+| `pipeline-scheduler-sa` | Cloud Scheduler | start the one pipeline job |
+
+All of it is defined in `infra/terraform/iam.tf`.
+
+- **Rate limiting** — 30 req/min on data endpoints, 15 req/min on LLM-touching endpoints (`/ask`, `/prescriptive-insight`), enforced via `slowapi`, verified with a 35-request burst test
+- **Input validation** — state/category parameters checked before any BigQuery query runs
+- **GCP budget alert** — configured with alerts at 50/90/100% of monthly threshold
+- **Cloud Run scaling caps** — hard ceiling on concurrent compute regardless of traffic (max 3 API instances, 2 app instances)
+- **Secrets** — Gemini API key stored in Secret Manager, injected at runtime, never in plaintext Terraform
+
+### Resource identifiers
+
+| Resource | Value |
+|---|---|
+| Project ID | modular-rush-495414-i2 |
+| Region | asia-southeast1 (Singapore) |
+| API service | inflation-api (Cloud Run) |
+| App service | inflation-app (Cloud Run) |
+| Data pipeline job | inflation-data-pipeline (Cloud Run Job) |
+| Pipeline schedule | 3rd of every month, 03:00 UTC (Cloud Scheduler) |
+
+---
+
 ## Tech Stack
 
 | Layer | Tools |
@@ -194,7 +216,7 @@ How to read this: the two retrieval rows are exact counts and the most trustwort
 | Transformation | dbt, SQL (BigQuery dialect) |
 | ML Training | XGBoost, statsforecast (AutoETS), scikit-learn |
 | GenAI / RAG | Gemini API (gemini-embedding-001, gemini-3.1-flash-lite), FAISS |
-| Serving | FastAPI, uvicorn, joblib, slowapi (rate limiting) |
+| Serving | FastAPI, uvicorn, slowapi (rate limiting) |
 | Frontend | Streamlit (bilingual EN/BM), Plotly |
 | Automation | Cloud Scheduler, Cloud Run Jobs |
 | Deployment | Docker, Cloud Run, Artifact Registry |
@@ -256,9 +278,15 @@ malaysia-inflation-intel/
 │   ├── run_eval.py               # runner: retrieval metrics, judge, results files, CI gate
 │   └── knowledge_base_mirror.py  # mirrors the real knowledge base for scoring context
 ├── app/streamlit/
-│   ├── app.py                   # bilingual UI — all 4 modes
+│   ├── app.py                   # bilingual UI: Home, Data, Calculator, Relocation
+│   ├── budget.py, user_profile.py, household_spending.py   # budget maths, saved profiles, HES 2024 averages
+│   ├── ui_logic.py, api_cache.py                           # small helpers, kept testable
+│   ├── test_*.py                # app unit tests, including whole-app navigation tests
 │   ├── Dockerfile, requirements.txt
+├── tests/{api,evaluation,training}/   # pytest suites, run on every pull request
+├── docs/                        # case study, backtest report, chatbot design, screenshots
 └── .github/workflows/
+    ├── tests.yml                 # lint + unit tests on every PR
     ├── terraform.yml             # validate Terraform on every PR
     ├── pr-build.yml              # build + smoke-test all three images on every PR
     ├── pipeline-image.yml        # build + push the monthly pipeline image
@@ -317,6 +345,7 @@ uvicorn api:app --reload --port 8081
 ### 6 — Start the Streamlit app
 ```bash
 cd app/streamlit
+pip install -r requirements.txt     # pinned: Streamlit 1.37
 API_URL=http://localhost:8081 streamlit run app.py
 ```
 
@@ -332,123 +361,13 @@ python run_eval.py
 
 ---
 
-## Tests
-
-```bash
-pip install pytest ruff
-pytest -m "not slow"      # API + forecasting unit tests, a few seconds
-pytest                    # also trains real models on synthetic data (~2 min)
-ruff check .
-```
-
-- `tests/api/` exercises every API endpoint's validation, the precomputed-forecast lookups, the scorecard and the `/ask` prompt assembly. Retrieval and Gemini are faked, so no key or GCP access is needed.
-- `tests/evaluation/` checks the chatbot evaluation harness itself: judge-reply parsing, retrieval metrics, the pass / fail / incomplete verdict, and that every test question points at a knowledge-base entry that exists.
-- `tests/training/` covers the forecast ranges, the live scorecard arithmetic, the baseline forecasters, the backtest metrics, and the moving-average leak that the original model had.
-- Two slow tests train real models: the **leakage self-test** (multiply all data after the forecast date by 50; no forecast may change) and an end-to-end run of the monthly batch on synthetic data.
-
-All of this runs on every pull request (`.github/workflows/tests.yml`) with the same pinned requirements as the production images.
-
----
-
-## LLM Observability
-
-**What users type into the chat is not stored.** The first version of this logged every call, including users' questions, with a notice in the app. I took that out: a household budgeting app has no good reason to keep what people ask it. The API now records an LLM call only when it comes from my own evaluation run.
-
-How it works: the evaluation workflow sends a secret token in an `X-Eval-Token` header. The API compares it with the token it holds (from Secret Manager). On a match, the call writes one row to BigQuery, `observability.llm_calls`. With no token, a wrong token, or no token configured on the server, nothing is written. Tests cover each of those cases.
-
-| What is recorded (evaluation calls only) | Why |
-|---|---|
-| `retrieval_ms`, `generation_ms`, `total_ms` | Where the time goes: finding context, or the model |
-| `prompt_tokens`, `output_tokens`, `total_tokens` | Cost per answer |
-| `retrieved_ids`, `retrieved_distances` | Which knowledge-base entries were used, and how close the match was |
-| `llm_calls`, `tools_called`, `tool_errors` | How many model calls the answer took, which tools it used, and how many came back as errors |
-| `status`, `error_type`, `error_message`, `finish_reason` | Failures and cut-off answers |
-| `model`, `api_revision`, `forecast_version` | Which deployment produced the answer |
-| `question`, `answer` | The test question and what the chatbot said |
-
-Because every evaluation run asks the same questions, the table shows how latency, token use and retrieval change from one deployment to the next.
-
-Some design decisions:
-
-- **Logging never breaks an answer.** A failed write is caught; the reply still goes out.
-- **The row is written before the response is sent.** Cloud Run only gives the container CPU while a request is in flight, so a background write could be lost.
-- **Rows expire after 90 days** (day-partitioned table).
-- **A test keeps the code and the table in step**: every field the API logs must have a column in the Terraform schema.
-- **Gemini failures are a clean 503** with a "try again" message, where they used to be an unhandled 500.
-
-The trade-off: there is no view of real traffic, so a slow or failing day for users shows up only in Cloud Run's own request metrics (status codes and latency, no content). Content-free metrics for real calls would be the next step if that proves too thin.
-
-Example query:
-
-```sql
--- Latency and tokens per deployment, from evaluation runs
-SELECT api_revision, DATE(MIN(ts)) AS first_seen,
-       COUNT(*) AS calls,
-       COUNTIF(status = 'error') AS errors,
-       APPROX_QUANTILES(total_ms, 100)[OFFSET(50)] AS p50_ms,
-       APPROX_QUANTILES(total_ms, 100)[OFFSET(95)] AS p95_ms,
-       ROUND(AVG(total_tokens)) AS avg_tokens
-FROM `observability.llm_calls`
-GROUP BY api_revision
-ORDER BY first_seen DESC;
-```
-
----
-
-## Deployment
-
-Infrastructure is fully defined in Terraform, including Secret Manager-backed API keys and the automated monthly pipeline. CI/CD via GitHub Actions runs automatically on push to `main` when `ml/serving/` or `app/streamlit/` files change, and dynamically fetches each service's real deployed URL rather than guessing it — self-correcting if Cloud Run's URL format ever changes.
-
-```bash
-cd infra/terraform
-terraform apply -var="alert_email=you@example.com"   # emails you if the monthly pipeline fails
-```
-
-All three images use **fully pinned** requirements (every transitive dependency), and every pull request builds and smoke-tests them (`.github/workflows/pr-build.yml`). An unpinned rebuild once broke the Streamlit app (pyarrow vs NumPy). The pinned pipeline environment was also how a missing `scikit-learn` in the pipeline image was caught.
-
-**Access.** GitHub Actions signs in to Google Cloud without a stored key (Workload Identity Federation): GitHub issues a short-lived token for each run, and Google accepts it only from this repository's `main` branch. Each identity has one job and only the access that job needs:
-
-| Identity | Used by | Can |
-|---|---|---|
-| `github-deployer` | GitHub Actions | push images to one repository, deploy revisions, update the pipeline job |
-| `vertex-sa` | API | read the ML artifacts bucket and BigQuery, write the LLM log table, read two secrets |
-| `streamlit-app-sa` | Streamlit app | nothing: it only calls the API over HTTPS |
-| `ingestion-sa` | monthly pipeline job | write two buckets, load and transform BigQuery data |
-| `pipeline-scheduler-sa` | Cloud Scheduler | start the one pipeline job |
-
-All of it is defined in `infra/terraform/iam.tf`.
-
----
-
-## Public Launch Safety
-
-- **Rate limiting** — 30 req/min on data endpoints, 15 req/min on LLM-touching endpoints (`/ask`, `/prescriptive-insight`), enforced via `slowapi`, verified with a 35-request burst test
-- **Input validation** — state/category parameters checked before any BigQuery query runs
-- **GCP budget alert** — configured with alerts at 50/90/100% of monthly threshold
-- **Cloud Run scaling caps** — hard ceiling on concurrent compute regardless of traffic (max 3 API instances, 2 app instances)
-- **Secrets** — Gemini API key stored in Secret Manager, injected at runtime, never in plaintext Terraform
-
----
-
-## GCP Resource Identifiers
-
-| Resource | Value |
-|---|---|
-| Project ID | modular-rush-495414-i2 |
-| Region | asia-southeast1 (Singapore) |
-| API service | inflation-api (Cloud Run) |
-| App service | inflation-app (Cloud Run) |
-| Data pipeline job | inflation-data-pipeline (Cloud Run Job) |
-| Pipeline schedule | 3rd of every month, 03:00 UTC (Cloud Scheduler) |
-
----
-
 ## Known Issues / Engineering Notes
 
 - **RAGAS dependency conflict.** The standard RAG evaluation library `ragas` (both 0.4.3 and 0.3.9) hit an unpatched upstream bug — `ragas.llms.base` imports `ChatVertexAI` from a `langchain_community` path that was relocated upstream, confirmed via the library's own GitHub issues (#2741, #2745). The documented workaround (pinning `langchain-community==0.2.17`) then surfaced a separate, unrelated `numpy==1.26.4` binary incompatibility on Python 3.13/Windows. Rather than continue chasing a fragile dependency chain, `evaluation/scorer.py` implements the same LLM-as-judge approach directly on the Gemini API.
 - **Category-specific causal reasoning.** The `/ask` endpoint can explain *how* a metric like "biggest leak" is calculated, but doesn't yet have per-category economic narratives explaining *why* a specific category (e.g. Transport) is moving the way it is, beyond general model mechanics. Documented in `knowledge_base.py` as `category_specific_causes_limitation`.
 - **State-level granularity.** CPI and price data are reported at the state level, not district/city level — DOSM's district-level "Decent Living Expenditure Index" (released Dec 2025) is a logged future improvement, not yet integrated.
 - **Forecast ranges are pooled across categories.** The 80% ranges come from the last 36 months of backtest errors. In an out-of-sample test, ranges built from Aug 2020–Jul 2023 covered 81% of outcomes from Aug 2023 onward. Per-category ranges were tested but overfit (62–72% coverage), so every category currently gets the same % width at a given horizon.
+- **Cold starts.** The API scales to zero to keep costs near nothing, and a cold start takes about 20 seconds. The app wakes it with one cheap background request when a visitor first opens the page, so most visitors never wait, but one who lands directly on the Data page after a long idle period can.
 - **Short-horizon forecasts are inherently weak.** Monthly CPI is sticky, and even the best model only modestly beats "no change" at 1–3 months. Forecasts should be presented with that uncertainty.
 
 ---
