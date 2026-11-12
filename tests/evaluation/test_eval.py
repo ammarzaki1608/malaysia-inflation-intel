@@ -28,6 +28,10 @@ def test_every_expected_context_id_exists_in_the_knowledge_base():
         assert len(get_texts_for_ids(ids)) == len(ids), f"unknown knowledge-base id in: {tc['question']}"
 
 
+# must match ASK_TOOL_FUNCTIONS in ml/serving/api.py (tests/api checks the API side)
+KNOWN_TOOLS = {"get_forecast", "rank_categories", "rank_states", "get_forecast_accuracy"}
+
+
 def test_test_set_is_well_formed():
     questions = [tc["question"] for tc in TEST_QUESTIONS]
     assert len(questions) == len(set(questions)), "duplicate question"
@@ -36,6 +40,8 @@ def test_test_set_is_well_formed():
         assert tc.get("lang", "en") in ("en", "ms")
         if tc.get("expect_refusal"):
             assert "expected_context" not in tc, "out-of-scope questions have no right entry to retrieve"
+        elif tc.get("expected_tools"):
+            assert set(tc["expected_tools"]) <= KNOWN_TOOLS, f"unknown tool in: {tc['question']}"
         else:
             assert tc["expected_context"], f"no expected_context for: {tc['question']}"
         if tc["needs_live_data"]:
@@ -46,6 +52,57 @@ def test_test_set_covers_both_languages_and_refusals():
     assert sum(tc.get("lang") == "ms" for tc in TEST_QUESTIONS) >= 4
     assert sum(bool(tc.get("expect_refusal")) for tc in TEST_QUESTIONS) >= 3
     assert any(tc.get("lang") == "ms" and tc.get("expect_refusal") for tc in TEST_QUESTIONS)
+
+
+def test_test_set_covers_every_tool_and_the_no_tool_case():
+    data = [tc for tc in TEST_QUESTIONS if tc.get("expected_tools")]
+    assert {name for tc in data for name in tc["expected_tools"]} == KNOWN_TOOLS
+    assert any(tc.get("lang") == "ms" for tc in data)
+    assert any(tc["needs_live_data"] for tc in data), "one must rely on what the user is viewing"
+    assert sum(tc.get("expected_tools") == [] for tc in TEST_QUESTIONS) >= 5
+
+
+# ── tool choice ──────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("called, expected, correct", [
+    (["get_forecast"], ["get_forecast"], True),
+    (["get_forecast", "get_forecast"], ["get_forecast", "rank_states"], True),   # any acceptable tool
+    (["rank_categories"], ["get_forecast"], False),
+    ([], ["get_forecast"], False),                                              # answered without data
+    ([], [], True),                                                             # general question
+    (["get_forecast"], [], False),                                              # wasted a call
+])
+def test_tool_choice_correct(called, expected, correct):
+    assert run_eval.tool_choice_correct(called, expected) is correct
+
+
+def test_data_questions_are_judged_against_what_the_tools_returned(monkeypatch):
+    prompts = []
+    monkeypatch.setattr(scorer, "_generate", lambda p: prompts.append(p) or GOOD)
+    monkeypatch.setattr(run_eval, "call_ask_endpoint", lambda q, live, **kw: {
+        "answer": "Food in Sabah is forecast to rise 0.6%.", "retrieved_context": ["data_sources"],
+        "tools_called": ["get_forecast"],
+        "tool_results": [{"name": "get_forecast", "args": {"state": "Sabah"},
+                          "result": {"forecast": [{"month": "2026-12", "expected_change_pct": 0.6}]}}]})
+    case = next(tc for tc in TEST_QUESTIONS if tc.get("expected_tools") == ["get_forecast"])
+    record = run_eval.run_single_evaluation(case)
+
+    assert record["tool_choice"]["correct"] is True
+    assert set(record["scores"]) == {"faithfulness", "answer_relevancy"}    # no fixed reference answer
+    assert 'DATA FROM TOOL get_forecast({"state": "Sabah"})' in prompts[0]
+    assert '"expected_change_pct": 0.6' in prompts[0]
+    assert '"correctness"' not in prompts[0]
+
+
+def test_wrong_tool_choices_fail_the_run():
+    results = [{"question": f"q{i}", "scores": {"faithfulness": 1.0, "answer_relevancy": 1.0,
+                                                 "context_precision": 1.0, "correctness": 1.0, "refusal": 1.0},
+                "tool_choice": {"correct": i < 2, "called": [], "expected": ["get_forecast"]}}
+               for i in range(4)]
+    summary = run_eval.summarise(results)
+    assert summary["tools"] == {"accuracy": 0.5, "n": 4}
+    status, reasons = run_eval.verdict(summary)
+    assert status == "failed" and "tool choice accuracy 0.50" in reasons[0]
 
 
 # ── judge reply parsing: never default a score ───────────────────────────────
@@ -176,7 +233,8 @@ def offline(monkeypatch, tmp_path):
 
     def fake_ask(question, needs_live_data, **kwargs):
         expected = by_question[question].get("expected_context", ["app_bilingual"])
-        return {"answer": "An answer.", "retrieved_context": [expected[0], "data_sources"]}
+        return {"answer": "An answer.", "retrieved_context": [expected[0], "data_sources"],
+                "tools_called": by_question[question].get("expected_tools", [])[:1], "tool_results": []}
 
     def fake_generate(prompt):
         if '"refusal"' in prompt:
@@ -198,6 +256,7 @@ def test_full_run_passes_and_writes_results(offline, capsys):
     assert report["status"] == "passed"
     assert report["summary"]["judged"] == len(TEST_QUESTIONS)
     assert report["summary"]["retrieval"]["hit_rate"] == 1.0
+    assert report["summary"]["tools"]["accuracy"] == 1.0
     assert set(report["summary"]["by_lang"]) == {"en", "ms"}
     assert all("reasons" in r for r in report["results"])
 

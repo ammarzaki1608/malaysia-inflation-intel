@@ -132,22 +132,26 @@ def test_forecast_accuracy_404_before_first_scorecard(client, monkeypatch, tmp_p
     assert client.get("/forecast-accuracy").status_code == 404
 
 
-# ── /ask (RAG) ───────────────────────────────────────────────────────────────
+# ── /ask (RAG + tool calling) ────────────────────────────────────────────────
 
-@pytest.mark.parametrize("question, expected", [
-    ("Why is my forecast so high?", True),
-    ("Kenapa perbelanjaan saya naik?", True),
-    ("WHY DOES MY transport cost rise?", True),
-    ("What does B40 mean?", False),
-    ("How often is the data refreshed?", False),
-])
-def test_needs_live_forecast_heuristic(question, expected):
-    assert api._needs_live_forecast(question) is expected
+def prompt_of(call) -> str:
+    """The text of the first message sent to the model in one recorded call."""
+    return call["contents"][0]["parts"][0]["text"]
 
 
-@pytest.fixture
-def fake_llm(monkeypatch):
-    """Replace retrieval and Gemini; record the prompt the model would have been sent."""
+def tool_call(name, **args):
+    return SimpleNamespace(name=name, args=args, id=f"call-{name}")
+
+
+def model_turn(text=None, calls=()):
+    """What Gemini returns: either an answer, or a request to run tools."""
+    return SimpleNamespace(text=text, function_calls=list(calls),
+                           candidates=[SimpleNamespace(content={"role": "model", "parts": ["<model turn>"]},
+                                                       finish_reason=SimpleNamespace(name="STOP"))])
+
+
+def install_llm(monkeypatch, script):
+    """Fake retrieval and a fake Gemini that replies with `script` (the last entry repeats)."""
     calls = []
 
     def fake_retrieve(query, top_k=3):
@@ -155,8 +159,9 @@ def fake_llm(monkeypatch):
                 {"id": "kb_two", "text": "FACT TWO", "distance": 0.2}]
 
     def generate_content(model, contents, config):
-        calls.append({"model": model, "contents": contents, "config": config})
-        return SimpleNamespace(text="A grounded answer.")
+        calls.append({"model": model, "contents": list(contents) if isinstance(contents, list) else contents,
+                      "config": config})
+        return script[min(len(calls), len(script)) - 1]
 
     monkeypatch.setattr(api, "retrieve", fake_retrieve)
     monkeypatch.setattr(api, "_ask_genai_client",
@@ -164,38 +169,199 @@ def fake_llm(monkeypatch):
     return calls
 
 
-def test_ask_general_question_uses_knowledge_only(client, forecast_table, fake_llm):
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """A model that answers straight away, without asking for any tool."""
+    return install_llm(monkeypatch, [SimpleNamespace(text="A grounded answer.")])
+
+
+def tool_results_sent(call) -> list:
+    """The tool results the API sent back to the model in one recorded call."""
+    return [p.function_response for message in call["contents"][2:] if hasattr(message, "parts")
+            for p in message.parts]
+
+
+def test_ask_general_question_needs_one_model_call_and_no_tool(client, forecast_table, fake_llm):
     r = client.post("/ask", json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
     assert r.status_code == 200
     body = r.json()
     assert body["answer"] == "A grounded answer."
     assert body["retrieved_context"] == ["kb_one", "kb_two"]
     assert body["used_live_forecast_data"] is False
+    assert body["tools_called"] == [] and body["tool_results"] == []
 
-    prompt = fake_llm[0]["contents"]
+    assert len(fake_llm) == 1
+    prompt = prompt_of(fake_llm[0])
     assert "FACT ONE" in prompt and "FACT TWO" in prompt
-    assert "Not applicable" in prompt                      # no forecast numbers were injected
+    # what the user has open is a hint; no forecast numbers are pasted in up front
+    assert "State: Selangor. Category: Food & Non-Alcoholic Beverages." in prompt
+    assert "130" not in prompt
     assert "never invent" in fake_llm[0]["config"]["system_instruction"]
 
 
-def test_ask_personal_question_includes_live_forecast(client, forecast_table, fake_llm):
-    r = client.post("/ask", json={"question": "Why is my forecast rising?", "state": "Selangor",
-                                  "division": "07", "horizon_months": 3})
+def test_ask_offers_the_tools_and_runs_them_itself(client, fake_llm):
+    client.post("/ask", json={"question": "What does B40 mean?"})
+    config = fake_llm[0]["config"]
+    names = [d["name"] for d in config["tools"][0]["function_declarations"]]
+    assert sorted(names) == sorted(api.ASK_TOOL_FUNCTIONS)
+    assert config["automatic_function_calling"] == {"disable": True}
+    assert config["tool_config"]["function_calling_config"]["mode"] == "AUTO"
+    assert "Nothing selected." in prompt_of(fake_llm[0])
+
+
+def test_the_request_is_valid_for_the_gemini_sdk(client, forecast_table, monkeypatch):
+    """The fake model accepts anything; the real SDK must accept the same config and messages."""
+    from google.genai import types
+    calls = install_llm(monkeypatch, [
+        model_turn(calls=[tool_call("get_forecast", state="Selangor", category="Transport")]),
+        model_turn(text="Done."),
+    ])
+    client.post("/ask", json={"question": "Will transport rise in Selangor?"})
+    for call in calls:
+        types.GenerateContentConfig.model_validate(call["config"])
+    for message in calls[1]["contents"]:
+        if isinstance(message, dict) and message.get("role") == "user":
+            types.Content.model_validate(message)
+    sent = calls[1]["contents"][2]
+    assert isinstance(sent, types.Content) and sent.role == "user"
+
+
+def test_ask_runs_the_tool_the_model_asks_for_and_returns_its_result(client, forecast_table, monkeypatch):
+    calls = install_llm(monkeypatch, [
+        model_turn(calls=[tool_call("get_forecast", state="Selangor", category="Transport", horizon_months=3)]),
+        model_turn(text="Transport in Selangor is forecast to rise 0.6%."),
+    ])
+    r = client.post("/ask", json={"question": "Will transport get more expensive in Selangor?"})
     assert r.status_code == 200
-    assert r.json()["used_live_forecast_data"] is True
-    prompt = fake_llm[0]["contents"]
-    assert "Transport in Selangor" in prompt
-    assert "2026-09-01" in prompt                          # latest real data date from the table
+    body = r.json()
+    assert body["answer"] == "Transport in Selangor is forecast to rise 0.6%."
+    assert body["tools_called"] == ["get_forecast"]
+    assert body["used_live_forecast_data"] is True
+    result = body["tool_results"][0]["result"]
+    assert result["category"] == "Transport" and len(result["forecast"]) == 3
+
+    assert len(calls) == 2
+    # the second call carries: the question, the model's own turn unchanged, then the tool result
+    assert calls[1]["contents"][1] == {"role": "model", "parts": ["<model turn>"]}
+    (sent,) = tool_results_sent(calls[1])
+    assert sent.name == "get_forecast" and sent.id == "call-get_forecast"
+    assert sent.response["forecast"][2]["expected_change_pct"] == 0.6
 
 
-def test_ask_personal_question_without_state_skips_live_data(client, forecast_table, fake_llm):
-    r = client.post("/ask", json={"question": "Why is my forecast rising?"})
+def test_ask_can_compare_two_states_in_one_round(client, forecast_table, monkeypatch):
+    """The old keyword version could only ever see the one forecast open in the app."""
+    calls = install_llm(monkeypatch, [
+        model_turn(calls=[tool_call("get_forecast", state="Selangor", category="01"),
+                          tool_call("get_forecast", state="Kedah", category="01")]),
+        model_turn(text="Both rise about the same."),
+    ])
+    r = client.post("/ask", json={"question": "Is food rising faster in Selangor or Kedah?"})
+    assert r.json()["tools_called"] == ["get_forecast", "get_forecast"]
+    assert [s.response["state"] for s in tool_results_sent(calls[1])] == ["Selangor", "Kedah"]
+
+
+def test_ask_forces_an_answer_after_the_round_limit(client, forecast_table, monkeypatch):
+    again = model_turn(calls=[tool_call("rank_states", category="Food & Non-Alcoholic Beverages")])
+    calls = install_llm(monkeypatch, [again, again, model_turn(text="Final answer.")])
+    r = client.post("/ask", json={"question": "Which state?"})
+    assert r.status_code == 200 and r.json()["answer"] == "Final answer."
+    assert len(calls) == api.ASK_MAX_TOOL_ROUNDS + 1
+    modes = [c["config"]["tool_config"]["function_calling_config"]["mode"] for c in calls]
+    assert modes == ["AUTO", "AUTO", "NONE"]                # the last call may not ask for tools
+
+
+def test_ask_returns_503_if_the_model_never_answers(client, forecast_table, monkeypatch):
+    forever = model_turn(calls=[tool_call("get_forecast_accuracy")])
+    calls = install_llm(monkeypatch, [forever])
+    r = client.post("/ask", json={"question": "How accurate?"})
+    assert r.status_code == 503
+    assert len(calls) == api.ASK_MAX_TOOL_ROUNDS + 1         # it stopped; it did not loop forever
+
+
+def test_ask_caps_the_number_of_tool_calls(client, forecast_table, monkeypatch):
+    greedy = model_turn(calls=[tool_call("get_forecast", state="Selangor", category="01")] * 10)
+    calls = install_llm(monkeypatch, [greedy, model_turn(text="Enough.")])
+    r = client.post("/ask", json={"question": "Everything please"})
+    assert len(r.json()["tools_called"]) == api.ASK_MAX_TOOL_CALLS
+    assert calls[1]["config"]["tool_config"]["function_calling_config"]["mode"] == "NONE"
+
+
+def test_a_bad_tool_argument_goes_back_to_the_model_as_an_error(client, forecast_table, monkeypatch):
+    calls = install_llm(monkeypatch, [
+        model_turn(calls=[tool_call("get_forecast", state="Atlantis", category="Transport")]),
+        model_turn(text="I don't have data for that state."),
+    ])
+    r = client.post("/ask", json={"question": "Transport in Atlantis?"})
     assert r.status_code == 200
     assert r.json()["used_live_forecast_data"] is False
+    (sent,) = tool_results_sent(calls[1])
+    assert "Unknown state 'Atlantis'" in sent.response["error"] and "Selangor" in sent.response["error"]
 
 
-def test_ask_rejects_unknown_state_for_personal_question(client, forecast_table, fake_llm):
-    r = client.post("/ask", json={"question": "Why is my forecast rising?", "state": "Atlantis", "division": "01"})
+@pytest.mark.parametrize("name, args, expected", [
+    ("delete_everything", {}, "Unknown tool"),
+    ("get_forecast", {"planet": "Mars"}, "Wrong arguments"),
+    ("get_forecast", {"state": "Selangor", "category": "Gold bars"}, "Unknown category"),
+    ("get_forecast", {"state": "Perlis", "category": "Health"}, "No forecast is available"),
+    ("rank_categories", {"state": "Atlantis"}, "Unknown state"),
+    ("rank_states", {"category": "Gold bars"}, "Unknown category"),
+])
+def test_tools_report_problems_instead_of_raising(client, forecast_table, name, args, expected):
+    assert expected in api.run_tool(name, args)["error"]
+
+
+def test_a_crashing_tool_does_not_take_the_answer_down(client, monkeypatch):
+    def boom(**kwargs):
+        raise RuntimeError("storage is down")
+    monkeypatch.setitem(api.ASK_TOOL_FUNCTIONS, "get_forecast_accuracy", boom)
+    assert api.run_tool("get_forecast_accuracy", {}) == {"error": "get_forecast_accuracy is unavailable right now."}
+
+
+def test_get_forecast_tool_reports_change_from_the_latest_actual_month(client, forecast_table):
+    out = api.tool_get_forecast("Selangor", "Food & Non-Alcoholic Beverages", 3)
+    assert out["latest_actual_month"] == "2026-09" and out["change_over_past_12_months_pct"] == 2.5
+    assert [m["month"] for m in out["forecast"]] == ["2026-10", "2026-11", "2026-12"]
+    assert [m["expected_change_pct"] for m in out["forecast"]] == [0.2, 0.4, 0.6]
+    first = out["forecast"][0]
+    assert first["range_low_pct"] < first["expected_change_pct"] < first["range_high_pct"]
+    assert out["range_confidence_pct"] == 80
+    # a code works as well as a name, and the horizon is kept inside 1..12
+    assert api.tool_get_forecast("Selangor", "01", 99)["horizon_months"] == 12
+    assert api.tool_get_forecast("Selangor", "transport", "soon")["horizon_months"] == 6
+
+
+def test_rank_tools_put_the_biggest_rise_first(client, forecast_table, monkeypatch):
+    rows = api.forecast_rows[("Kedah", "01")]
+    monkeypatch.setitem(api.forecast_rows, ("Kedah", "01"),
+                        [dict(r, predicted_index=r["base_index"] * 1.05) for r in rows])
+    states = api.tool_rank_states("Food & Non-Alcoholic Beverages", 6)["states_biggest_rise_first"]
+    assert [s["name"] for s in states] == ["Kedah", "Selangor"]         # only states with a forecast
+    assert states[0]["forecast_change_pct"] == 5.0 and states[1]["forecast_change_pct"] == 1.2
+
+    cats = api.tool_rank_categories("Selangor", 12)["categories_biggest_rise_first"]
+    assert {c["name"] for c in cats} == {"Food & Non-Alcoholic Beverages", "Transport"}
+    assert cats[0]["forecast_change_pct"] >= cats[1]["forecast_change_pct"]
+
+
+def test_forecast_accuracy_tool(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(api, "_scorecard", {"checked_at": 1e12, "data": {
+        "latest_actual_date": "2026-09-01", "scored_forecasts": 208,
+        "by_horizon": {"1": {"n": 208, "mae_pp": 0.268, "rel_mae": 1.004, "coverage_80": 0.793}}}})
+    out = api.tool_get_forecast_accuracy()
+    assert out["forecasts_scored"] == 208 and out["by_months_ahead"]["1"]["coverage_80"] == 0.793
+
+    # nothing published yet (a missing local file, so the test never reaches GCS)
+    monkeypatch.setattr(api, "SCORECARD_LOCAL_PATH", str(tmp_path / "missing.json"))
+    monkeypatch.setattr(api, "_scorecard", {"checked_at": 0.0, "data": None})
+    assert "error" in api.tool_get_forecast_accuracy()
+
+
+@pytest.mark.parametrize("payload", [
+    {"question": "Why is my forecast rising?", "state": "Atlantis", "division": "01"},
+    {"question": "What does B40 mean?", "state": "Selangor", "division": "99"},
+])
+def test_ask_rejects_an_unknown_state_or_category(client, forecast_table, fake_llm, payload):
+    r = client.post("/ask", json=payload)
     assert r.status_code == 400
     assert fake_llm == []                                  # the model was never called
 
@@ -336,6 +502,20 @@ def test_prescriptive_insight_returns_503_when_gemini_fails(client, llm_log, mon
     assert llm_log[0]["status"] == "error"
 
 
+def test_log_row_records_the_tool_loop_and_adds_up_tokens(client, forecast_table, llm_log, monkeypatch):
+    first = model_turn(calls=[tool_call("get_forecast", state="Selangor", category="Transport"),
+                              tool_call("get_forecast", state="Atlantis", category="Transport")])
+    second = model_turn(text="Answer.")
+    first.usage_metadata = second.usage_metadata = _Usage()
+    install_llm(monkeypatch, [first, second])
+    client.post("/ask", headers=EVAL, json={"question": "Transport in Selangor?"})
+    row = llm_log[0]
+    assert row["llm_calls"] == 2
+    assert row["tools_called"] == ["get_forecast", "get_forecast"] and row["tool_errors"] == 1
+    assert row["used_live_forecast_data"] is True
+    assert (row["prompt_tokens"], row["output_tokens"], row["total_tokens"]) == (824, 116, 940)
+
+
 def test_a_users_question_is_never_logged(client, forecast_table, fake_llm, llm_log):
     """No token, no row: what users type into the chat is not recorded."""
     r = client.post("/ask", json={"question": "What does B40 mean?", "state": "Selangor", "division": "01"})
@@ -386,5 +566,6 @@ def test_every_logged_field_has_a_column_in_the_terraform_table():
         "retrieval_ms", "retrieved_ids", "retrieved_distances", "generation_ms", "prompt_chars",
         "answer", "answer_chars", "finish_reason", "prompt_tokens", "output_tokens", "total_tokens",
         "error_type", "error_message", "total_ms", "context_type",
+        "llm_calls", "tools_called", "tool_errors",
     }
     assert logged <= columns, f"no column for: {sorted(logged - columns)}"

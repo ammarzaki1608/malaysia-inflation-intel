@@ -38,6 +38,7 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "rag"))
 from retriever import load_index_from_gcs, retrieve
 from google import genai
+from google.genai import types as genai_types
 
 logging.basicConfig(
     level=logging.INFO,
@@ -804,15 +805,8 @@ async def state_leaderboard(request: Request, division: str):
 _scorecard = {"data": None, "checked_at": 0.0}
 
 
-@app.get("/forecast-accuracy")
-@limiter.limit("30/minute")
-async def forecast_accuracy(request: Request):
-    """
-    Live, out-of-sample track record of the forecasts actually published:
-    each month's published forecasts scored against the CPI released since.
-    Built by forecast_batch.py; refreshed hourly. Empty until the first
-    published forecasts reach their target months.
-    """
+def load_scorecard():
+    """The published scorecard, re-read at most hourly. None if there is none yet."""
     if time.time() - _scorecard["checked_at"] > FORECAST_REFRESH_S or _scorecard["data"] is None:
         _scorecard["checked_at"] = time.time()
         try:
@@ -824,9 +818,22 @@ async def forecast_accuracy(request: Request):
                 _scorecard["data"] = json.loads(blob.download_as_text())
         except Exception as e:
             logger.warning(f"Scorecard not available: {e}")
-    if _scorecard["data"] is None:
-        raise HTTPException(status_code=404, detail="No scorecard published yet.")
     return _scorecard["data"]
+
+
+@app.get("/forecast-accuracy")
+@limiter.limit("30/minute")
+async def forecast_accuracy(request: Request):
+    """
+    Live, out-of-sample track record of the forecasts actually published:
+    each month's published forecasts scored against the CPI released since.
+    Built by forecast_batch.py; refreshed hourly. Empty until the first
+    published forecasts reach their target months.
+    """
+    data = load_scorecard()
+    if data is None:
+        raise HTTPException(status_code=404, detail="No scorecard published yet.")
+    return data
 
 
 @app.get("/headline-inflation")
@@ -884,20 +891,224 @@ class AskRequest(BaseModel):
 GENERATION_MODEL = "gemini-3.1-flash-lite"
 _ask_genai_client = None
 
-# Keywords suggesting the question is about the user's OWN specific
-# numbers, not a general "how does this app work" question. This is a
-# lightweight heuristic — not perfect, but free and fast, avoiding an
-# extra LLM call just to classify intent.
-PERSONAL_QUESTION_SIGNALS = [
-    "my forecast", "my spending", "my category", "my leak", "my surplus",
-    "my number", "why is my", "why does my", "this category", "this forecast",
-    "unjuran saya", "perbelanjaan saya", "kategori saya", "bocor saya",
-]
+
+# ── Tools the chatbot can call ───────────────────────────────────────────────
+#
+# App knowledge is retrieved for every question. On top of that, the model may
+# ask for data by calling one of the tools below ("function calling"): it
+# replies with a tool name and arguments, the API runs the function and sends
+# the result back, and the model then writes its answer from that result.
+#
+# This replaced a keyword list that guessed whether a question needed forecast
+# numbers, and could only ever supply the one forecast open in the app.
+#
+# Every tool reads the forecast table or scorecard already held in memory, so
+# a tool call costs milliseconds and no database query. Tools never raise: a
+# bad argument comes back as {"error": ...} so the model can correct itself or
+# tell the user.
+
+ASK_MAX_TOOL_ROUNDS = 2      # model turns that may request tools, before a final answer is forced
+ASK_MAX_TOOL_CALLS = 6       # tool calls per question, across all rounds
+
+_CATEGORY_BY_NAME = {name.lower(): code for code, name in CATEGORIES.items()}
 
 
-def _needs_live_forecast(question: str) -> bool:
-    q = question.lower()
-    return any(signal in q for signal in PERSONAL_QUESTION_SIGNALS)
+def _category_code(value):
+    """Accept a category name ("Transport") or its code ("07"). None if unknown."""
+    v = str(value or "").strip()
+    if v in CATEGORIES:
+        return v
+    if v.zfill(2) in CATEGORIES:
+        return v.zfill(2)
+    return _CATEGORY_BY_NAME.get(v.lower())
+
+
+def _horizon(value) -> int:
+    """Months ahead, 1 to 12. Anything unusable becomes 6."""
+    try:
+        return max(1, min(12, int(value)))
+    except (TypeError, ValueError):
+        return 6
+
+
+def _pct_from_base(value: float, base: float) -> float:
+    return round((value / base - 1) * 100, 2)
+
+
+def _row_at(rows: list, h: int):
+    return next((r for r in rows if r["h"] == h), None)
+
+
+def tool_get_forecast(state=None, category=None, horizon_months=6) -> dict:
+    code = _category_code(category)
+    if state not in STATES:
+        return {"error": f"Unknown state '{state}'. Valid states: {', '.join(STATES)}."}
+    if code is None:
+        return {"error": f"Unknown category '{category}'. Valid categories: {'; '.join(CATEGORIES.values())}."}
+    h = _horizon(horizon_months)
+    maybe_refresh_forecast_table()
+    rows = forecast_rows.get((state, code))
+    if not rows:
+        return {"error": f"No forecast is available for {CATEGORIES[code]} in {state}."}
+    return {
+        "state": state,
+        "category": CATEGORIES[code],
+        "horizon_months": h,
+        "latest_actual_month": str(rows[0]["base_date"])[:7],
+        "change_over_past_12_months_pct": rows[0].get("past_12m_change_pct"),
+        "forecast": [
+            {"month": str(r["target_date"])[:7],
+             "expected_change_pct": _pct_from_base(r["predicted_index"], r["base_index"]),
+             "range_low_pct": _pct_from_base(r["lower_bound"], r["base_index"]),
+             "range_high_pct": _pct_from_base(r["upper_bound"], r["base_index"])}
+            for r in rows if r["h"] <= h
+        ],
+        "range_confidence_pct": round((forecast_meta.get("interval_level") or 0.8) * 100),
+        "note": "Each figure is the percent change in the price index compared with the latest "
+                "actual month. These are not ringgit amounts.",
+    }
+
+
+def _ranking(series: list, h: int) -> list:
+    """[(label, rows)] -> rows ranked by forecast change at h months, biggest rise first."""
+    out = []
+    for label, rows in series:
+        row = _row_at(rows or [], h)
+        if row is None:
+            continue
+        out.append({"name": label,
+                    "forecast_change_pct": _pct_from_base(row["predicted_index"], row["base_index"]),
+                    "change_over_past_12_months_pct": rows[0].get("past_12m_change_pct")})
+    return sorted(out, key=lambda x: x["forecast_change_pct"], reverse=True)
+
+
+def tool_rank_categories(state=None, horizon_months=6) -> dict:
+    if state not in STATES:
+        return {"error": f"Unknown state '{state}'. Valid states: {', '.join(STATES)}."}
+    h = _horizon(horizon_months)
+    maybe_refresh_forecast_table()
+    ranked = _ranking([(name, forecast_rows.get((state, code))) for code, name in CATEGORIES.items()], h)
+    if not ranked:
+        return {"error": f"No forecasts are available for {state}."}
+    return {"state": state, "horizon_months": h, "categories_biggest_rise_first": ranked,
+            "note": "forecast_change_pct is the expected percent change in each category's price "
+                    f"index over the next {h} months."}
+
+
+def tool_rank_states(category=None, horizon_months=6) -> dict:
+    code = _category_code(category)
+    if code is None:
+        return {"error": f"Unknown category '{category}'. Valid categories: {'; '.join(CATEGORIES.values())}."}
+    h = _horizon(horizon_months)
+    maybe_refresh_forecast_table()
+    ranked = _ranking([(state, forecast_rows.get((state, code))) for state in STATES], h)
+    if not ranked:
+        return {"error": f"No forecasts are available for {CATEGORIES[code]}."}
+    return {"category": CATEGORIES[code], "horizon_months": h, "states_biggest_rise_first": ranked,
+            "note": "This compares how fast prices are expected to change in each state. It does "
+                    "not say which state is more expensive."}
+
+
+def tool_get_forecast_accuracy() -> dict:
+    data = load_scorecard()
+    if not data:
+        return {"error": "No track record has been published yet."}
+    return {
+        "latest_actual_month": str(data.get("latest_actual_date"))[:7],
+        "forecasts_scored": data.get("scored_forecasts"),
+        "by_months_ahead": data.get("by_horizon"),
+        "meaning": "mae_pp is the average error in percentage points. rel_mae below 1 means the "
+                   "forecasts were more accurate than assuming prices stay the same. coverage_80 "
+                   "is the share of actual values that fell inside the 80% range (ideal: 0.80). "
+                   "Only horizons that have reached their target month are listed.",
+    }
+
+
+ASK_TOOL_FUNCTIONS = {
+    "get_forecast": tool_get_forecast,
+    "rank_categories": tool_rank_categories,
+    "rank_states": tool_rank_states,
+    "get_forecast_accuracy": tool_get_forecast_accuracy,
+}
+
+_STATE_PARAM = {"type": "string", "enum": STATES, "description": "Malaysian state or federal territory."}
+_CATEGORY_PARAM = {"type": "string", "enum": list(CATEGORIES.values()), "description": "Spending category."}
+_HORIZON_PARAM = {"type": "integer", "description": "Months ahead, 1 to 12. Default 6."}
+
+ASK_TOOLS = [{"function_declarations": [
+    {
+        "name": "get_forecast",
+        "description": "Month-by-month price forecast for ONE spending category in ONE state, with its "
+                       "range and the change over the past 12 months. Call it once per state or "
+                       "category when comparing two or three of them.",
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {"state": _STATE_PARAM, "category": _CATEGORY_PARAM, "horizon_months": _HORIZON_PARAM},
+            "required": ["state", "category"],
+        },
+    },
+    {
+        "name": "rank_categories",
+        "description": "All spending categories in one state, ranked by how much their prices are "
+                       "forecast to rise. Use for 'which category will rise most in <state>'.",
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {"state": _STATE_PARAM, "horizon_months": _HORIZON_PARAM},
+            "required": ["state"],
+        },
+    },
+    {
+        "name": "rank_states",
+        "description": "All states ranked by how much one category's prices are forecast to rise. "
+                       "Use for 'which state will see the biggest rise in <category>'.",
+        "parameters_json_schema": {
+            "type": "object",
+            "properties": {"category": _CATEGORY_PARAM, "horizon_months": _HORIZON_PARAM},
+            "required": ["category"],
+        },
+    },
+    {
+        "name": "get_forecast_accuracy",
+        "description": "The live track record: how the forecasts this app actually published compared "
+                       "with the official figures released afterwards.",
+        "parameters_json_schema": {"type": "object", "properties": {}},
+    },
+]}]
+
+
+def run_tool(name: str, args: dict) -> dict:
+    """Run one tool the model asked for. Never raises."""
+    fn = ASK_TOOL_FUNCTIONS.get(name)
+    if fn is None:
+        return {"error": f"Unknown tool '{name}'."}
+    try:
+        return fn(**args)
+    except TypeError:
+        return {"error": f"Wrong arguments for {name}: {sorted(args)}."}
+    except Exception as e:                       # a tool must not take the whole answer down
+        logger.warning(f"Tool {name} failed: {e.__class__.__name__}: {e}")
+        return {"error": f"{name} is unavailable right now."}
+
+
+ASK_SYSTEM_INSTRUCTION = (
+    "You are a helpful assistant for a Malaysian personal inflation forecasting app. "
+    "You must ONLY use the domain knowledge provided and the data returned by your tools — never invent "
+    "numbers, dates, or facts that are not in them. If the question cannot be answered from them, say "
+    "so honestly rather than guessing. Keep answers concise, in plain language, and answer in the "
+    "language the question was asked in.\n"
+    "Tools: call a tool when the question needs forecast numbers, a comparison between states or "
+    "categories, or the forecasts' track record. Do not call a tool for questions about how the app "
+    "works or what a term means; answer those from the domain knowledge alone. When the user says "
+    "'my' or 'this' forecast or category, use the state and category they are viewing. The forecasts "
+    "cover one state and one category at a time: there is no national forecast, so do not present a "
+    "state figure as a national one. Never recommend specific financial products."
+)
+
+
+def _add_usage(total: dict, response) -> None:
+    for key, value in _token_usage(response).items():
+        if value is not None:
+            total[key] = total.get(key, 0) + value
 
 
 # ── LLM observability ────────────────────────────────────────────────────────
@@ -963,7 +1174,7 @@ def log_llm_call(record: dict) -> None:
         global bq_client
         if bq_client is None:
             bq_client = bigquery.Client(project=PROJECT_ID)
-        errors = bq_client.insert_rows_json(LLM_LOG_TABLE, [row], timeout=5)
+        errors = bq_client.insert_rows_json(LLM_LOG_TABLE, [row], timeout=5, ignore_unknown_values=True)
         if errors:
             logger.warning(f"LLM log row rejected by BigQuery: {errors}")
     except Exception as e:
@@ -994,9 +1205,12 @@ def log_eval_call(request: Request, record: dict) -> None:
 @limiter.limit("15/minute")
 async def ask(request: Request, body: AskRequest):
     """
-    Answers a question about the app in general, OR about the user's
-    specific forecast — grounded in retrieved domain knowledge, and in
-    live forecast data only when the question actually needs it.
+    Answers a question about the app or about the forecasts.
+
+    App knowledge is retrieved for every question. The model can then call
+    tools (see ASK_TOOLS) to fetch forecast data it needs, for any state or
+    category, not only the one open in the app. The loop is capped: after
+    ASK_MAX_TOOL_ROUNDS rounds of tool calls the model must answer.
 
     Calls from the evaluation run are recorded (log_eval_call); users' calls
     are not. If retrieval or the model fails (for example Gemini is
@@ -1006,12 +1220,11 @@ async def ask(request: Request, body: AskRequest):
     if _ask_genai_client is None:
         _ask_genai_client = genai.Client()
 
-    wants_live = bool(body.state and body.division and _needs_live_forecast(body.question))
-    if wants_live:                      # reject bad input before spending any LLM calls
-        if body.state not in STATES:
-            raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
-        if body.division not in CATEGORIES:
-            raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
+    # reject bad input before spending any LLM calls
+    if body.state is not None and body.state not in STATES:
+        raise HTTPException(status_code=400, detail=f"Unknown state: {body.state}")
+    if body.division is not None and body.division not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Unknown division code: {body.division}")
 
     started = time.perf_counter()
     log = {
@@ -1021,6 +1234,7 @@ async def ask(request: Request, body: AskRequest):
         "used_live_forecast_data": False,
         "forecast_version": forecast_meta.get("version"),
     }
+    tool_calls: list[dict] = []
 
     try:
         # Step 1 — retrieve relevant domain knowledge (always happens)
@@ -1030,63 +1244,79 @@ async def ask(request: Request, body: AskRequest):
         log["retrieved_distances"] = [round(float(r["distance"]), 4) for r in retrieved if "distance" in r]
         knowledge_context = "\n\n".join([f"- {r['text']}" for r in retrieved])
 
-        # Step 2 — only fetch live forecast data if the question actually
-        # seems to be about the user's own numbers, and state/division
-        # were actually provided
-        forecast_summary = "Not applicable — this question does not require the user's live forecast data."
-        used_live_data = False
-
-        if wants_live:
-            forecast_result = get_forecast(body.state, body.division, body.horizon_months)
-            category_name = CATEGORIES.get(body.division, body.division)
-            forecast_summary = (
-                f"Category: {category_name} in {body.state}\n"
-                f"Forecast horizon: {body.horizon_months} months\n"
-                f"Latest real data date: {forecast_result['latest_real_date']}\n"
-                f"Month-by-month forecast: {forecast_result['forecasts']}"
-            )
-            used_live_data = True
-        log["used_live_forecast_data"] = used_live_data
-
-        # Step 3 — build a grounded prompt
-        system_instruction = (
-            "You are a helpful assistant for a Malaysian personal inflation forecasting app. "
-            "You must ONLY use the domain knowledge and forecast data provided below — never invent "
-            "numbers, dates, or facts not present in this context. If the question cannot be answered "
-            "from the provided context, say so honestly rather than guessing. Keep answers concise, "
-            "in plain language. If the question is a general question about how the app works, answer "
-            "from the domain knowledge alone without needing specific numbers."
-        )
+        # Step 2 — tell the model what the user has open, as a hint. Whether to
+        # fetch numbers for it (or for anything else) is the model's decision.
+        viewing = "Nothing selected."
+        if body.state and body.division:
+            viewing = (f"State: {body.state}. Category: {CATEGORIES[body.division]}. "
+                       f"Forecast horizon: {_horizon(body.horizon_months)} months.")
+        elif body.state:
+            viewing = f"State: {body.state}."
 
         prompt = f"""DOMAIN KNOWLEDGE:
 {knowledge_context}
 
-LIVE FORECAST DATA:
-{forecast_summary}
+WHAT THE USER IS VIEWING IN THE APP:
+{viewing}
 
 USER QUESTION:
 {body.question}
 
-Answer the user's question using only the domain knowledge and forecast data above."""
+Answer the user's question using only the domain knowledge above and data from your tools."""
 
-        # Step 4 — generate the grounded answer
-        gen_started = time.perf_counter()
-        response = _ask_genai_client.models.generate_content(
-            model=GENERATION_MODEL,
-            contents=prompt,
-            config={
-                "system_instruction": system_instruction,
-                "max_output_tokens": 300,
-                "temperature": 0.3,
-            },
-        )
-        answer = response.text
-        log["generation_ms"] = round((time.perf_counter() - gen_started) * 1000)
+        # Step 3 — let the model call tools, then answer
+        contents = [{"role": "user", "parts": [{"text": prompt}]}]
+        usage: dict = {}
+        generation_ms, llm_calls, answer, response = 0.0, 0, None, None
+        for round_no in range(ASK_MAX_TOOL_ROUNDS + 1):
+            final_round = round_no == ASK_MAX_TOOL_ROUNDS or len(tool_calls) >= ASK_MAX_TOOL_CALLS
+            call_started = time.perf_counter()
+            response = _ask_genai_client.models.generate_content(
+                model=GENERATION_MODEL,
+                contents=contents,
+                config={
+                    "system_instruction": ASK_SYSTEM_INSTRUCTION,
+                    "max_output_tokens": 400,
+                    "temperature": 0.3,
+                    "tools": ASK_TOOLS,
+                    "automatic_function_calling": {"disable": True},     # this loop runs the tools
+                    # on the final round the model may no longer ask for tools
+                    "tool_config": {"function_calling_config": {"mode": "NONE" if final_round else "AUTO"}},
+                },
+            )
+            generation_ms += (time.perf_counter() - call_started) * 1000
+            llm_calls += 1
+            _add_usage(usage, response)
+
+            requested = list(getattr(response, "function_calls", None) or [])
+            if not requested or final_round:
+                answer = response.text
+                break
+
+            # Send the model's own turn back unchanged (it carries the signature
+            # Gemini needs to continue), followed by each tool's result.
+            contents.append(response.candidates[0].content)
+            result_parts = []
+            for call in requested[:ASK_MAX_TOOL_CALLS - len(tool_calls)]:
+                args = dict(call.args or {})
+                result = run_tool(call.name, args)
+                tool_calls.append({"name": call.name, "args": args, "result": result})
+                result_parts.append(genai_types.Part(function_response=genai_types.FunctionResponse(
+                    name=call.name, response=result, id=getattr(call, "id", None))))
+            contents.append(genai_types.Content(role="user", parts=result_parts))
+
+        log["generation_ms"] = round(generation_ms)
+        log["llm_calls"] = llm_calls
+        log["tools_called"] = [c["name"] for c in tool_calls]
+        log["tool_errors"] = sum(1 for c in tool_calls if "error" in c["result"])
+        log["used_live_forecast_data"] = any("error" not in c["result"] for c in tool_calls)
         log["prompt_chars"] = len(prompt)
-        log["answer"] = answer
-        log["answer_chars"] = len(answer or "")
         log["finish_reason"] = _finish_reason(response)
-        log.update(_token_usage(response))
+        log.update(usage)
+        if not answer:
+            raise RuntimeError("the model returned no answer text")
+        log["answer"] = answer
+        log["answer_chars"] = len(answer)
     except HTTPException:
         raise
     except Exception as e:
@@ -1103,8 +1333,12 @@ Answer the user's question using only the domain knowledge and forecast data abo
         "question": body.question,
         "answer": answer,
         "retrieved_context": [r["id"] for r in retrieved],
-        "used_live_forecast_data": used_live_data,
+        "used_live_forecast_data": log["used_live_forecast_data"],
+        "tools_called": log["tools_called"],
+        # what each tool returned, so an answer's numbers can be checked against them
+        "tool_results": tool_calls,
     }
+
 
 class PrescriptiveRequest(BaseModel):
     context_type: str  # "personal_calculator" or "relocation_planner"

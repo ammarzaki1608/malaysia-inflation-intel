@@ -12,6 +12,14 @@ Each entry has:
                     (then state / division / horizon_months are sent too)
   expect_refusal    True for out-of-scope or adversarial questions: a grounded
                     assistant should decline rather than invent.
+  expected_tools    which tools the chatbot should call, scored without any LLM.
+                    Calling any one of the listed tools counts as correct. An
+                    empty list means the question needs no data, so the right
+                    move is to call nothing. Omitted where either is defensible.
+                    A question with a non-empty list is a "data question": the
+                    numbers change every month, so there is no fixed reference
+                    answer and the judge checks the answer against what the
+                    tools returned (faithfulness and relevancy only).
 
 IMPORTANT: When you change knowledge_base.py or the /ask prompt,
 re-run the evaluation harness against this same test set to check
@@ -34,6 +42,7 @@ TEST_QUESTIONS = [
     },
     {
         "question": "How is the recommended minimum salary calculated?",
+        "expected_tools": [],
         "ground_truth": "It is the projected total destination spending multiplied by 1.30, adding a 30% buffer for savings and unexpected costs.",
         "expected_context": ["relocation_salary_needed"],
         "needs_live_data": False,
@@ -58,12 +67,14 @@ TEST_QUESTIONS = [
     },
     {
         "question": "How often is the underlying data refreshed?",
+        "expected_tools": [],
         "ground_truth": "Automatically every month via a scheduled Cloud Run Job that re-downloads the latest DOSM and BNM data and rebuilds all derived tables.",
         "expected_context": ["automated_pipeline"],
         "needs_live_data": False,
     },
     {
         "question": "What does B40 mean?",
+        "expected_tools": [],
         "ground_truth": "B40 refers to the bottom 40% of Malaysian households by income.",
         "expected_context": ["b40_m40_t20"],
         "needs_live_data": False,
@@ -79,6 +90,7 @@ TEST_QUESTIONS = [
     },
     {
         "question": "What data source is used for household income context?",
+        "expected_tools": [],
         "ground_truth": "The DOSM Household Income and Expenditure Survey (HIES) 2022 edition, which is a periodic snapshot, not a continuously updated monthly series.",
         "expected_context": ["hies_survey", "data_sources"],
         "needs_live_data": False,
@@ -97,6 +109,7 @@ TEST_QUESTIONS = [
     },
     {
         "question": "What does the Transport category cover?",
+        "expected_tools": [],
         "ground_truth": "Transport (CPI Division 07) covers fuel, public transport fares, and vehicle purchase and maintenance costs, and is directly affected by fuel subsidy policy changes.",
         "expected_context": ["cpi_division_07"],
         "needs_live_data": False,
@@ -117,6 +130,7 @@ TEST_QUESTIONS = [
     # ── Bahasa Malaysia: the app is bilingual, so the chatbot is tested in both ──
     {
         "question": "Apakah maksud B40?",
+        "expected_tools": [],
         "lang": "ms",
         "ground_truth": "B40 refers to the bottom 40% of Malaysian households by income.",
         "expected_context": ["b40_m40_t20"],
@@ -141,6 +155,61 @@ TEST_QUESTIONS = [
         "lang": "ms",
         "ground_truth": "The 80% range is built from the forecasts' real errors in backtesting, and forecasts further ahead have historically been less accurate, so the range widens with the horizon.",
         "expected_context": ["forecast_ranges", "forecast_horizon_limitation"],
+        "needs_live_data": False,
+    },
+
+    # ── Data questions: the chatbot must fetch numbers with a tool ──
+    {
+        "question": "Is transport forecast to rise faster in Selangor or Johor over the next 6 months?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer says which of the two states has the larger forecast rise, using only figures present in the tool data.",
+        "expected_tools": ["get_forecast", "rank_states"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "Which spending category is forecast to rise the most in Kedah over the next 12 months?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer names the category with the largest forecast rise in Kedah, using only figures present in the tool data.",
+        "expected_tools": ["rank_categories"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "Which state is forecast to see the biggest rise in food prices over the next 6 months?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer names the state with the largest forecast rise for food, using only figures present in the tool data.",
+        "expected_tools": ["rank_states"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "What is the forecast for food prices in Sabah over the next 3 months?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer gives the forecast change for food in Sabah and mentions its range, using only figures present in the tool data.",
+        "expected_tools": ["get_forecast"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "How have the published forecasts performed against the actual figures so far?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer describes the live track record, including how it compares with assuming no change, using only figures present in the tool data.",
+        "expected_tools": ["get_forecast_accuracy"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "How much is this category forecast to rise?",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer gives the forecast change for Housing in Pulau Pinang, the category the user is viewing, using only figures present in the tool data.",
+        "expected_tools": ["get_forecast"],
+        "needs_live_data": True,
+        "state": "Pulau Pinang",
+        "division": "04",
+        "horizon_months": 6,
+    },
+    {
+        "question": "Kategori manakah yang dijangka naik paling banyak di Johor dalam tempoh 6 bulan akan datang?",
+        "lang": "ms",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer names the category with the largest forecast rise in Johor, using only figures present in the tool data.",
+        "expected_tools": ["rank_categories"],
+        "needs_live_data": False,
+    },
+    {
+        "question": "Apakah unjuran harga makanan di Perak untuk 6 bulan akan datang?",
+        "lang": "ms",
+        "ground_truth": "No fixed reference: the forecast numbers change every month. A good answer gives the forecast change for food in Perak, using only figures present in the tool data.",
+        "expected_tools": ["get_forecast"],
         "needs_live_data": False,
     },
 

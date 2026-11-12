@@ -43,6 +43,9 @@ _client = None
 
 ANSWER_METRICS = ("faithfulness", "answer_relevancy", "context_precision", "correctness")
 REFUSAL_METRICS = ("faithfulness", "refusal")
+# Answers built on live forecast data have no fixed reference answer (the numbers
+# change every month), so they are judged against the data the tools returned.
+DATA_METRICS = ("faithfulness", "answer_relevancy")
 
 RUBRIC = {
     "faithfulness": (
@@ -113,8 +116,8 @@ def _generate(prompt: str) -> str:
 
 
 def build_prompt(question: str, answer: str, contexts: list[str],
-                 ground_truth: str, expect_refusal: bool) -> str:
-    metrics = REFUSAL_METRICS if expect_refusal else ANSWER_METRICS
+                 ground_truth: str, expect_refusal: bool, metrics: tuple | None = None) -> str:
+    metrics = metrics or (REFUSAL_METRICS if expect_refusal else ANSWER_METRICS)
     context_text = "\n".join(f"- {c}" for c in contexts) or "(nothing was retrieved)"
     rubric = "\n".join(f"- {m}: {RUBRIC[m]}" for m in metrics)
     shape = ", ".join(f'"{m}": {{"reason": "<one sentence>", "score": <0.0-1.0>}}' for m in metrics)
@@ -172,14 +175,14 @@ def parse_judgement(text: str, metrics: tuple) -> dict:
 
 
 def judge(question: str, answer: str, contexts: list[str], ground_truth: str,
-          expect_refusal: bool = False) -> dict:
+          expect_refusal: bool = False, metrics: tuple | None = None) -> dict:
     """
     Score one answer on every applicable metric with a single judge call.
     Returns {metric: {"score", "reason"}}. Raises JudgeUnavailable if Gemini
     stays down, or JudgeInvalid if two replies in a row are unusable.
     """
-    metrics = REFUSAL_METRICS if expect_refusal else ANSWER_METRICS
-    prompt = build_prompt(question, answer, contexts, ground_truth, expect_refusal)
+    metrics = metrics or (REFUSAL_METRICS if expect_refusal else ANSWER_METRICS)
+    prompt = build_prompt(question, answer, contexts, ground_truth, expect_refusal, metrics)
     last = None
     for attempt in (1, 2):
         try:
