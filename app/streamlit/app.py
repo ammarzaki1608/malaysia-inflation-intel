@@ -6,7 +6,6 @@ and helps Malaysians plan relocation decisions using official
 DOSM and BNM data.
 """
 
-import functools
 import json
 from html import escape
 
@@ -20,6 +19,7 @@ import copy
 import os
 
 from budget import rank_pressure, cumulative_extra, salary_check, what_if_savings
+from api_cache import cache_successes
 from ui_logic import insight_signature, month_label, saved_insight
 from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
                           encode_profile, typical_spending, typical_total)
@@ -351,38 +351,6 @@ def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
 # Streamlit's default cache spinner shows "Running fetch_xxx()", which exposes
 # internal function names to users. Show a neutral bilingual message instead.
 LOADING_TEXT = "Loading data… / Memuatkan data…"
-
-
-class _NotCached(Exception):
-    """Carries a failed call's result past st.cache_data, which would otherwise keep it."""
-
-    def __init__(self, result):
-        self.result = result
-
-
-def cache_successes(ttl: int, show_spinner=LOADING_TEXT):
-    """
-    st.cache_data for API calls that return None (or an empty result) when they
-    fail. Plain st.cache_data would remember that failure for the whole ttl: one
-    timeout while the API was starting up hid its data for an hour. Here only
-    successful results are kept, so the next visit tries again.
-    """
-    def decorate(fn):
-        @st.cache_data(ttl=ttl, show_spinner=show_spinner)
-        def cached(*args, **kwargs):
-            result = fn(*args, **kwargs)
-            if not result:
-                raise _NotCached(result)      # exceptions are never cached
-            return result
-
-        @functools.wraps(fn)
-        def call(*args, **kwargs):
-            try:
-                return cached(*args, **kwargs)
-            except _NotCached as failed:
-                return failed.result
-        return call
-    return decorate
 
 
 @cache_successes(ttl=300, show_spinner=LOADING_TEXT)
