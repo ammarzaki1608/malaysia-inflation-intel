@@ -128,7 +128,7 @@ Answer quality, with one judge call per question returning all metrics as JSON:
 
 A judge reply that cannot be parsed is retried once and then reported as unscored, never counted as zero; if too few questions are scored (a Gemini outage), the run is reported as incomplete, not as a pass or a fail.
 
-It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails if any judge metric averages below 0.7, the retrieval hit rate falls below 0.8, or tool choice accuracy falls below 0.7. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
+It runs in CI against the live API on demand (its own workflow, `rag-eval.yml`, started from the Actions tab) and fails if any judge metric averages below 0.7, the retrieval hit rate falls below 0.8, or tool choice accuracy falls below 0.7. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. It is deliberately not run on every merge: a run makes about 60 to 100 Gemini requests on the same key as the live chatbot, and a day of automatic runs once used up the daily quota and took the chatbot down for users. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
 
 ---
 
@@ -263,7 +263,7 @@ malaysia-inflation-intel/
     ├── pr-build.yml              # build + smoke-test all three images on every PR
     ├── pipeline-image.yml        # build + push the monthly pipeline image
     ├── deploy.yml                # build + push + deploy on merge to main
-    └── rag-eval.yml              # chatbot evaluation after an API deploy (skipped for app-only changes)
+    └── rag-eval.yml              # chatbot evaluation, run on demand
 ```
 
 ---
