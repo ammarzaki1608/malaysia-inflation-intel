@@ -101,5 +101,5 @@ jobs:
             --set-env-vars API_URL=${{ needs.deploy-api.outputs.api_url }} \
             --quiet
 
-# The chatbot evaluation runs in its own workflow (rag-eval.yml) once this one
-# succeeds, so a slow evaluation never holds up the next deploy.
+# The chatbot evaluation is a separate workflow (rag-eval.yml) that is started
+# by hand. It is not run after each deploy, to keep Gemini usage for real users.

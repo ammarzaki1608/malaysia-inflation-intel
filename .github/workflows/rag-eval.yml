@@ -2,25 +2,14 @@ name: Evaluate chatbot answers
 
 # Scores the live /ask endpoint against evaluation/test_questions.py.
 #
-# This used to be a job inside deploy.yml. It lives here so that:
-#   - a slow Gemini day (20+ min) no longer holds up the next deploy, and
-#   - merges that only change the Streamlit app skip it: the chatbot is
-#     served by the API, so an app-only change cannot alter its answers.
+# It runs only on demand: Actions -> "Evaluate chatbot answers" -> Run workflow
+# (from main; sign-in to Google Cloud is only accepted from main).
 #
-# It runs:
-#   - after a successful deploy from main, if that commit changed ml/serving/
-#   - on a push to main that changed only evaluation/ (no deploy happens then)
-#   - on demand (Run workflow)
+# It used to run after every deploy that changed the API. Each run makes about
+# 60 to 100 Gemini requests on the same key as the live chatbot, so a day with
+# several merges used up the daily quota and took the chatbot down for real
+# users. Run it when a batch of changes is finished, not after each merge.
 on:
-  workflow_run:
-    workflows: ["Build and Deploy to Cloud Run"]
-    types: [completed]
-    branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - 'evaluation/**'
-      - '.github/workflows/rag-eval.yml'
   workflow_dispatch:
 
 # Only the newest deployed version is worth grading.
@@ -46,7 +35,6 @@ jobs:
     name: Evaluate chatbot answers
     runs-on: ubuntu-latest
     timeout-minutes: 35   # healthy run is a few minutes (one judge call per question); the script gives up at 30
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       # optional: marks these calls as evaluation traffic so the API logs them
@@ -57,44 +45,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          # grade with the test set from the commit that was deployed
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          fetch-depth: 2
 
-      - name: Decide whether this change needs an evaluation
+      - name: Check the Gemini key is set
         id: guard
-        env:
-          EVENT: ${{ github.event_name }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then
             echo "::warning::GEMINI_API_KEY secret not set — skipping RAG evaluation"
             echo "run=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
-
-          # Files changed by this commit (for a merged PR: everything in the PR).
-          changed=$(git diff --name-only HEAD^1 HEAD)
-          api_changed=false
-          if echo "$changed" | grep -q '^ml/serving/'; then api_changed=true; fi
-
-          run=true
-          case "$EVENT" in
-            workflow_run)
-              # after a deploy: only the API can change the chatbot's answers
-              if [ "$api_changed" = false ]; then
-                run=false
-                echo "::notice::Deploy did not change ml/serving/ — skipping RAG evaluation"
-              fi ;;
-            push)
-              # evaluation/ changed. If the API changed too, a deploy is running
-              # and this workflow will be triggered again when it finishes.
-              if [ "$api_changed" = true ]; then
-                run=false
-                echo "::notice::API also changed — evaluation will run after the deploy finishes"
-              fi ;;
-          esac
-          echo "run=$run" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to GCP
         if: steps.guard.outputs.run == 'true'

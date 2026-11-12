@@ -86,9 +86,11 @@ class JudgeInvalid(RuntimeError):
     """The judge answered, but not with usable scores, even after a retry."""
 
 
-# Waits between attempts. Gemini's 503 "high demand" spikes usually clear
-# within a minute or two; this keeps trying for about 2.5 minutes.
-RETRY_WAITS_S = [5, 15, 30, 45, 60]
+# Waits between attempts, for Gemini's short 503 "high demand" spikes.
+# Two retries only: every retry is another paid request on the key the live
+# chatbot uses, and five of them per call multiplied a run's requests whenever
+# Gemini was overloaded.
+RETRY_WAITS_S = [10, 30]
 
 
 def _generate(prompt: str) -> str:
