@@ -6,6 +6,8 @@ and helps Malaysians plan relocation decisions using official
 DOSM and BNM data.
 """
 
+import json
+
 import httpx
 import streamlit as st
 import streamlit.components.v1 as components
@@ -22,7 +24,7 @@ from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
     page_title="Malaysia Inflation Intelligence",
-    page_icon="🇲🇾",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -51,11 +53,11 @@ LANG = {
         "app_title": "Malaysia Personal Inflation Intelligence",
         "app_tagline": "Built on official DOSM & BNM data",
         "mode_label": "Choose mode",
-        "mode_home": "🏠 Home",
-        "mode_calculator": "📊 Personal Inflation Calculator",
-        "mode_relocation": "🗺️ Relocation Planner",
-        "origin_state_label": "Origin state (where you live now)",
-        "budget_header": "💰 Your monthly budget",
+        "mode_home": "Home",
+        "mode_calculator": "Calculator",
+        "mode_relocation": "Relocation",
+        "origin_state_label": "Your state",
+        "budget_header": "Your monthly budget",
         "budget_caption": "Enter real amounts — we'll do the maths.",
         "salary_label": "Monthly salary (RM)",
         "spending_header": "Spending per category (RM):",
@@ -63,23 +65,23 @@ LANG = {
         "unallocated_label": "Unallocated (savings)",
         "over_budget_error": "You've allocated RM{amount:,} more than your salary.",
         "horizon_label": "Forecast horizon",
-        "budget_forecast_title": "📊 Your Budget Forecast",
-        "reality_check_label": "📢 The reality check",
+        "budget_forecast_title": "Budget forecast",
+        "reality_check_label": "The reality check",
         "current_spending_label": "Current monthly spending",
         "projected_spending_label": "Projected spending (month {n})",
         "projected_surplus_label": "Projected monthly surplus",
-        "biggest_leak_label": "📈 Your biggest leak",
-        "best_category_label": "💚 Your best category",
+        "biggest_leak_label": "Your biggest leak",
+        "best_category_label": "Your best category",
         "category_forecasts_header": "Category forecasts",
         "full_breakdown_header": "Full breakdown",
-        "relocation_title": "🏠 Relocation Cost Planner",
+        "relocation_title": "Relocation planner",
         "moving_from_label": "Moving from",
         "moving_to_label": "Moving to",
         "suggested_spending_header": "Suggested spending in your new state",
-        "compare_button": "🔍 Compare full forecast",
+        "compare_button": "Compare full forecast",
         "salary_needed_label": "Recommended minimum salary",
-        "mode_explorer": "📈 Data Explorer",
-        "explorer_title": "📈 Data Explorer",
+        "mode_explorer": "Data",
+        "explorer_title": "Data explorer",
         "explorer_caption": "See the real historical trends behind your forecast — CPI, producer prices, and interest rates, straight from DOSM and BNM.",
         "explorer_state_label": "State",
         "explorer_category_label": "Category",
@@ -88,8 +90,8 @@ LANG = {
         "ppi_overlay_header": "Producer Prices vs Consumer Prices",
         "opr_overlay_header": "Interest Rate vs Inflation",
         "income_header": "Income & Expenditure Snapshot (HIES 2022)",
-        "mode_ask": "💬 Ask",
-        "ask_title": "💬 Ask About Your Forecast",
+        "mode_ask": "Ask",
+        "ask_title": "Ask About Your Forecast",
         "ask_caption": "Ask a question in plain language about your inflation forecast — answers are grounded in your actual data, not generic advice.",
         "ask_state_label": "State",
         "ask_category_label": "Category",
@@ -99,7 +101,7 @@ LANG = {
         "ask_thinking": "Thinking through your question...",
         "ask_error": "Could not get an answer right now. Please try again.",
         "ask_grounded_in": "This answer is based on your forecast for",
-        "national_overview_header": "🇲🇾 The National Picture",
+        "national_overview_header": "The National Picture",
         "national_overview_caption": "Here's how inflation looks across Malaysia as a whole, before we drill down.",
         "category_leaderboard_header": "Which categories are rising fastest?",
         "category_leaderboard_caption": "Year-on-year change, nationally, across all 13 CPI categories.",
@@ -111,11 +113,11 @@ LANG = {
         "app_title": "Maklumat Inflasi Peribadi Malaysia",
         "app_tagline": "Dibangunkan berdasarkan data rasmi DOSM & BNM",
         "mode_label": "Pilih mod",
-        "mode_home": "🏠 Laman Utama",
-        "mode_calculator": "📊 Kalkulator Inflasi Peribadi",
-        "mode_relocation": "🗺️ Perancang Perpindahan",
-        "origin_state_label": "Negeri asal (tempat kediaman semasa)",
-        "budget_header": "💰 Belanjawan bulanan anda",
+        "mode_home": "Utama",
+        "mode_calculator": "Kalkulator",
+        "mode_relocation": "Perpindahan",
+        "origin_state_label": "Negeri anda",
+        "budget_header": "Belanjawan bulanan anda",
         "budget_caption": "Masukkan jumlah sebenar — kami akan membuat pengiraan.",
         "salary_label": "Gaji bulanan (RM)",
         "spending_header": "Perbelanjaan mengikut kategori (RM):",
@@ -123,23 +125,23 @@ LANG = {
         "unallocated_label": "Tidak diperuntukkan (simpanan)",
         "over_budget_error": "Anda telah memperuntukkan RM{amount:,} lebih daripada gaji anda.",
         "horizon_label": "Tempoh unjuran",
-        "budget_forecast_title": "📊 Unjuran Belanjawan Anda",
-        "reality_check_label": "📢 Semakan realiti",
+        "budget_forecast_title": "Unjuran belanjawan",
+        "reality_check_label": "Semakan realiti",
         "current_spending_label": "Perbelanjaan bulanan semasa",
         "projected_spending_label": "Unjuran perbelanjaan (bulan ke-{n})",
         "projected_surplus_label": "Unjuran lebihan bulanan",
-        "biggest_leak_label": "📈 Ketirisan belanjawan terbesar",
-        "best_category_label": "💚 Kategori paling menjimatkan",
+        "biggest_leak_label": "Ketirisan belanjawan terbesar",
+        "best_category_label": "Kategori paling menjimatkan",
         "category_forecasts_header": "Unjuran kategori",
         "full_breakdown_header": "Pecahan terperinci",
-        "relocation_title": "🏠 Perancang Kos Perpindahan",
+        "relocation_title": "Perancang perpindahan",
         "moving_from_label": "Berpindah dari",
         "moving_to_label": "Berpindah ke",
         "suggested_spending_header": "Cadangan perbelanjaan di negeri baharu anda",
-        "compare_button": "🔍 Bandingkan unjuran penuh",
+        "compare_button": "Bandingkan unjuran penuh",
         "salary_needed_label": "Gaji minimum yang disyorkan",
-        "mode_explorer": "📈 Peneroka Data",
-        "explorer_title": "📈 Peneroka Data",
+        "mode_explorer": "Data",
+        "explorer_title": "Peneroka data",
         "explorer_caption": "Lihat trend sejarah sebenar di sebalik unjuran anda — CPI, harga pengeluar, dan kadar faedah, terus daripada DOSM dan BNM.",
         "explorer_state_label": "Negeri",
         "explorer_category_label": "Kategori",
@@ -148,8 +150,8 @@ LANG = {
         "ppi_overlay_header": "Harga Pengeluar lwn Harga Pengguna",
         "opr_overlay_header": "Kadar Faedah lwn Inflasi",
         "income_header": "Ringkasan Pendapatan & Perbelanjaan (HIES 2022)",
-        "mode_ask": "💬 Tanya",
-        "ask_title": "💬 Tanya Tentang Unjuran Anda",
+        "mode_ask": "Tanya",
+        "ask_title": "Tanya Tentang Unjuran Anda",
         "ask_caption": "Tanya soalan dalam bahasa mudah tentang unjuran inflasi anda — jawapan yang diberikan adalah berlandaskan data sebenar anda, dan bukannya sekadar nasihat umum.",
         "ask_state_label": "Negeri",
         "ask_category_label": "Kategori",
@@ -159,7 +161,7 @@ LANG = {
         "ask_thinking": "Sedang memproses soalan anda...",
         "ask_error": "Tidak dapat menjana jawapan pada masa ini. Sila cuba lagi.",
         "ask_grounded_in": "Jawapan ini adalah berdasarkan unjuran anda untuk",
-        "national_overview_header": "🇲🇾 Gambaran Kebangsaan",
+        "national_overview_header": "Gambaran Kebangsaan",
         "national_overview_caption": "Berikut adalah gambaran inflasi Malaysia secara keseluruhan, sebelum kita mendalami butiran.",
         "category_leaderboard_header": "Kategori mana yang meningkat paling pantas?",
         "category_leaderboard_caption": "Perubahan tahun ke tahun, secara kebangsaan, merentasi semua 13 kategori CPI.",
@@ -216,32 +218,136 @@ DEFAULT_PROFILES = {
 # ── custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
+    /* One palette: navy for brand and actions, warm greys for everything else,
+       red only where something is rising. (Also set in .streamlit/config.toml.) */
+    [data-testid="stDecoration"] { display: none; }
+    .block-container { padding-top: 2rem; max-width: 1100px; }
+    h1, h2, h3, h4 { color: #2C2C2A; font-weight: 600; letter-spacing: -0.01em; }
+    h1 { font-size: 1.9rem; }
+
+    /* Radio groups (page menu, language, horizon) shown as segmented pills */
+    div[role="radiogroup"] { gap: 6px; flex-wrap: wrap; }
+    div[role="radiogroup"] > label {
+        background: #FFFFFF; border: 1px solid #D3D1C7; border-radius: 8px;
+        padding: 5px 12px; margin: 0; cursor: pointer;
+    }
+    div[role="radiogroup"] > label > div:first-child { display: none; }
+    div[role="radiogroup"] > label p { font-size: 0.9rem; color: #5F5E5A; margin: 0; }
+    div[role="radiogroup"] > label:has(input:checked) { background: #E6F1FB; border-color: #0C447C; }
+    div[role="radiogroup"] > label:has(input:checked) p { color: #0C447C; font-weight: 600; }
+
     .metric-card {
-        background: #f8fafc;
-        border-radius: 12px;
-        padding: 20px;
-        border: 1px solid #e2e8f0;
-        text-align: center;
+        background: #F1EFE8; border-radius: 12px; padding: 20px;
+        border: 1px solid #D3D1C7; text-align: center;
     }
-    .metric-value {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #1F4E79;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #64748b;
-        margin-top: 4px;
-    }
+    .metric-value { font-size: 2.2rem; font-weight: 700; color: #0C447C; }
+    .metric-label { font-size: 0.85rem; color: #5F5E5A; margin-top: 4px; }
     .summary-box {
-        background: #EFF6FF;
-        border-left: 4px solid #1F4E79;
-        border-radius: 8px;
-        padding: 16px 20px;
-        margin: 16px 0;
+        background: #E6F1FB; border-left: 4px solid #0C447C;
+        border-radius: 8px; padding: 16px 20px; margin: 16px 0;
+    }
+
+    /* Home */
+    .mi-eyebrow { display: inline-block; font-size: 0.82rem; color: #185FA5; background: #E6F1FB;
+                  border-radius: 999px; padding: 3px 12px; margin-bottom: 14px; }
+    .mi-hero h1 { font-size: 2.3rem; line-height: 1.2; margin: 0 0 12px; color: #2C2C2A; }
+    .mi-hero p { font-size: 1.05rem; line-height: 1.6; color: #5F5E5A; margin: 0 0 20px; }
+    .mi-compare { border: 1px solid #D3D1C7; border-radius: 12px; padding: 18px 20px; }
+    .mi-compare .mi-title { font-size: 0.85rem; color: #5F5E5A; margin-bottom: 14px; }
+    .mi-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: #2C2C2A; margin-top: 12px; }
+    .mi-bar { height: 10px; border-radius: 3px; margin-top: 4px; }
+    .mi-note { font-size: 0.78rem; color: #5F5E5A; margin-top: 14px; }
+    .mi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+    .mi-card { background: #F1EFE8; border-radius: 10px; padding: 16px; font-size: 0.9rem;
+               line-height: 1.55; color: #444441; }
+    .mi-card b { display: block; color: #0C447C; margin-bottom: 4px; }
+    .mi-step-n { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+                 border-radius: 50%; background: #0C447C; color: #FFFFFF; font-weight: 600; font-size: 0.85rem; }
+    .mi-step h4 { margin: 8px 0 4px; font-size: 1rem; color: #0C447C; }
+    .mi-step p { font-size: 0.9rem; line-height: 1.55; color: #5F5E5A; margin: 0; }
+
+    /* AI suggestion */
+    .mi-insight { background: #E6F1FB; border: 1px solid #B5D4F4; border-radius: 10px;
+                  padding: 16px 20px; margin: 16px 0; color: #042C53; }
+    .mi-insight b { color: #0C447C; }
+    .mi-insight .mi-ai { font-size: 0.78rem; color: #5F5E5A; margin-top: 12px; padding-top: 8px;
+                         border-top: 1px solid #B5D4F4; }
+
+    @media (max-width: 640px) {
+        .block-container { padding-left: 1rem; padding-right: 1rem; }
+        .mi-hero h1 { font-size: 1.75rem; }
+        div[role="radiogroup"] > label { padding: 5px 9px; }
+        div[role="radiogroup"] > label p { font-size: 0.84rem; }
     }
 </style>
 """, unsafe_allow_html=True)
+
+# ── navigation helpers ────────────────────────────────────────────────────────
+
+def go_to_page(index: int, lang: str) -> None:
+    """Button callback: switch the page menu to `index`."""
+    st.session_state.page = index
+    st.session_state[f"mode_select_{lang}"] = index
+
+
+MONTHS_MS = ["Jan", "Feb", "Mac", "Apr", "Mei", "Jun", "Jul", "Ogos", "Sep", "Okt", "Nov", "Dis"]
+MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def month_label(iso_date: str, lang: str) -> str:
+    """'2026-09-01' -> 'Sep 2026'."""
+    try:
+        year, month = int(iso_date[:4]), int(iso_date[5:7])
+        return f"{(MONTHS_EN if lang == 'en' else MONTHS_MS)[month - 1]} {year}"
+    except (ValueError, IndexError, TypeError):
+        return ""
+
+
+def render_insight(context_type: str, summary_data: dict, lang: str) -> None:
+    """
+    The AI budgeting suggestion, generated only when the user asks for it.
+    Each suggestion is one Gemini call, so reports no longer make one by default.
+    The result is kept for as long as the numbers behind it stay the same.
+    """
+    en = lang == "en"
+    key = f"insight_{context_type}"
+    signature = json.dumps(summary_data, sort_keys=True, default=str)
+    saved = st.session_state.get(key)
+    if saved and saved["signature"] != signature:
+        saved = None
+
+    if saved is None:
+        with st.container(border=True):
+            left, right = st.columns([3, 1])
+            with left:
+                st.markdown(
+                    ("**Want a budgeting suggestion?**  \nWritten by AI from your figures, and only when you ask."
+                     if en else
+                     "**Mahu cadangan belanjawan?**  \nDitulis oleh AI berdasarkan angka anda, dan hanya apabila anda meminta."))
+            with right:
+                asked = st.button("Get suggestion" if en else "Dapatkan cadangan", key=f"{key}_button",
+                                  use_container_width=True)
+        if asked:
+            with st.spinner("Writing a suggestion…" if en else "Menulis cadangan…"):
+                data = fetch_prescriptive_insight(context_type, summary_data)
+            if data and data.get("insight"):
+                st.session_state[key] = {"signature": signature, "text": data["insight"]}
+                st.rerun()
+            st.error("Couldn't write a suggestion right now. Try again in a moment."
+                     if en else "Tidak dapat menulis cadangan sekarang. Cuba lagi sebentar nanti.")
+        return
+
+    label = "What you could consider" if en else "Apa yang boleh anda pertimbangkan"
+    note = ("Generated by AI (Google Gemini) from your numbers. General guidance, not financial advice."
+            if en else
+            "Dijana oleh AI (Google Gemini) berdasarkan angka anda. Panduan umum, bukan nasihat kewangan.")
+    st.markdown(f"""
+    <div class='mi-insight'>
+        <b>{label}</b><br><br>{saved["text"]}
+        <div class='mi-ai'>{note}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
 
 # ── helper functions ──────────────────────────────────────────────────────────
 # Streamlit's default cache spinner shows "Running fetch_xxx()", which exposes
@@ -379,8 +485,8 @@ def fetch_ask_answer(question: str, state: str, division: str | None, horizon_mo
 def fetch_prescriptive_insight(context_type: str, summary_data: dict) -> dict:
     """
     Get an auto-generated, general budgeting suggestion grounded in
-    the report's own numbers. Not cached — always regenerated with
-    the report, since summary_data changes each time.
+    the report's own numbers. Not cached; called only when the user presses
+    "Get suggestion" (see render_insight).
     """
     try:
         response = httpx.post(
@@ -461,7 +567,7 @@ def render_forecast_chart(forecast_data: list, category_name: str, base_amount_r
         x=steps,
         y=values,
         mode="lines+markers",
-        line=dict(color="#1F4E79", width=3),
+        line=dict(color="#0C447C", width=3),
         marker=dict(size=8),
         name=category_name,
     ))
@@ -506,12 +612,15 @@ def render_top_bar() -> tuple:
         except ValueError:
             page = 0
         st.session_state.page = page if 0 <= page < len(MODE_KEYS) else 0
+    nav_key = f"mode_select_{lang}"
     with col_mode:
         mode = st.radio(
             t["mode_label"], options=list(range(len(MODE_KEYS))),
-            index=st.session_state.page,
+            # only a new widget takes its start value from `index`; once it exists (or a
+            # button has set it through go_to_page) Streamlit keeps the value in state
+            **({} if nav_key in st.session_state else {"index": st.session_state.page}),
             format_func=lambda i: t[MODE_KEYS[i]], horizontal=True,
-            key=f"mode_select_{lang}", label_visibility="collapsed",
+            key=nav_key, label_visibility="collapsed",
         )
     st.session_state.page = mode
     st.query_params["page"] = str(mode)
@@ -642,7 +751,7 @@ def render_home(t, lang):
     if lang == "en":
         hero_title = "Malaysia Personal Inflation Intelligence"
         hero_sub = "The government publishes one inflation number for the whole country. But your inflation depends on how you actually spend your money. This tool calculates yours."
-        section1_title = "💡 What is personal inflation?"
+        section1_title = "What is personal inflation?"
         section1_body = (
             "Malaysia's official CPI is calculated using a fixed national basket — "
             "an assumed average of how Malaysians spend money across 13 categories.\n\n"
@@ -650,9 +759,7 @@ def render_home(t, lang):
             "you feel that much more than someone who spends only 20% on food.\n\n"
             "Your inflation = your spending pattern × actual price changes per category."
         )
-        example_label = "Example"
-        example_body = "Government headline CPI: 2.1%<br><br>Person A (heavy food spender): 2.8% 📈<br>Person B (heavy housing spender): 1.7% 📉<br><br>Same month. Same country. Different reality."
-        section2_title = "🛠️ What you can do with this app"
+        section2_title = "What you can do with this app"
         card1_title = "Budget Forecast"
         card1_body = "Enter your salary and how much you spend per category in ringgit. We project your spending 3, 6, or 12 months ahead, show you how it compares to official inflation, and flag which category is quietly eating into your budget the most."
         card1_best = "Best for: seeing what your money actually buys next year."
@@ -667,10 +774,10 @@ def render_home(t, lang):
         step2_body = "Type in your monthly salary and how much you actually spend per category in ringgit — no percentages, no guesswork. Pick how far ahead you want to forecast: 3, 6, or 12 months."
         step3_title = "Read your results"
         step3_body = "See how your spending compares to official inflation, which category is your biggest leak, and what your monthly surplus looks like months from now."
-        howto_header = "📖 How to use this app — 3 steps"
-        data_header = "📡 Where does the data come from?"
+        howto_header = "How to use this app — 3 steps"
+        data_header = "Where does the data come from?"
         data_intro = "All data is sourced from official Malaysian government APIs — no third-party or estimated data. Updated monthly."
-        disclaimer_header = "⚠️ Important disclaimer — please read"
+        disclaimer_header = "Important disclaimer — please read"
         dosm_body = "Department of Statistics Malaysia — monthly CPI by state and category, Producer Price Index, and household income survey data."
         bnm_body = "Monthly bank interest rates — the commercial banks' average base rate, which follows the Overnight Policy Rate (OPR), is a minor input to the forecasts."
         model_body = "An average of two models (ETS and XGBoost), retrained monthly on 2010–2026 data across 208 state-category series. Backtested on 2018–2026: modestly more accurate than assuming prices stay the same, with 80% ranges that held 81% of the time."
@@ -685,7 +792,7 @@ def render_home(t, lang):
     else:
         hero_title = "Maklumat Inflasi Peribadi Malaysia"
         hero_sub = "Kerajaan menerbitkan satu angka inflasi untuk seluruh negara. Namun, inflasi anda bergantung kepada cara sebenar anda berbelanja. Alat ini mengira kadar inflasi peribadi anda."
-        section1_title = "💡 Apakah itu inflasi peribadi?"
+        section1_title = "Apakah itu inflasi peribadi?"
         section1_body = (
             "CPI rasmi Malaysia dikira menggunakan 'bakul' tetap kebangsaan — "
             "anggaran purata bagaimana rakyat Malaysia berbelanja merentasi 13 kategori utama.\n\n"
@@ -693,9 +800,7 @@ def render_home(t, lang):
             "anda akan merasai kesan tersebut dengan lebih ketara berbanding individu yang hanya membelanjakan 20% untuk makanan.\n\n"
             "Inflasi peribadi anda = corak perbelanjaan anda × perubahan harga sebenar setiap kategori."
         )
-        example_label = "Contoh"
-        example_body = "CPI utama kerajaan: 2.1%<br><br>Individu A (Perbelanjaan makanan tinggi): 2.8% 📈<br>Individu B (Perbelanjaan perumahan tinggi): 1.7% 📉<br><br>Bulan yang sama. Negara yang sama. Realiti yang berbeza."
-        section2_title = "🛠️ Fungsi yang ditawarkan oleh aplikasi ini"
+        section2_title = "Fungsi yang ditawarkan oleh aplikasi ini"
         card1_title = "Unjuran Belanjawan"
         card1_body = "Masukkan gaji dan jumlah perbelanjaan anda mengikut kategori dalam unit Ringgit. Kami akan membuat unjuran perbelanjaan anda untuk tempoh 3, 6, atau 12 bulan akan datang, membandingkannya dengan inflasi rasmi, dan mengenal pasti kategori yang paling banyak menelan belanjawan anda secara diam-diam."
         card1_best = "Sesuai untuk: Mengetahui kuasa beli sebenar wang anda pada tahun hadapan."
@@ -710,10 +815,10 @@ def render_home(t, lang):
         step2_body = "Masukkan gaji bulanan dan perbelanjaan sebenar anda mengikut kategori dalam unit Ringgit — tiada peratusan atau anggaran diperlukan. Pilih tempoh unjuran yang anda inginkan: 3, 6, atau 12 bulan."
         step3_title = "Semak keputusan anda"
         step3_body = "Lihat perbandingan perbelanjaan anda dengan inflasi rasmi, kenal pasti kategori ketirisan terbesar anda, dan ketahui unjuran lebihan bulanan anda untuk beberapa bulan akan datang."
-        howto_header = "📖 Cara menggunakan aplikasi ini — 3 langkah"
-        data_header = "📡 Dari manakah sumber data ini diperoleh?"
+        howto_header = "Cara menggunakan aplikasi ini — 3 langkah"
+        data_header = "Dari manakah sumber data ini diperoleh?"
         data_intro = "Semua data diperoleh daripada API rasmi kerajaan Malaysia — tiada data pihak ketiga atau data anggaran digunakan. Dikemas kini pada setiap bulan."
-        disclaimer_header = "⚠️ Penafian penting — sila baca"
+        disclaimer_header = "Penafian penting — sila baca"
         dosm_body = "Jabatan Perangkaan Malaysia (DOSM) — data CPI bulanan mengikut negeri dan kategori, Indeks Harga Pengeluar (PPI), dan penyiasatan pendapatan isi rumah."
         bnm_body = "Kadar faedah bank bulanan — purata kadar asas bank perdagangan, yang mengikut Kadar Dasar Semalaman (OPR), ialah input kecil kepada unjuran."
         model_body = "Purata dua model (ETS dan XGBoost), dilatih semula setiap bulan atas data 2010–2026 merentasi 208 siri negeri-kategori. Diuji semula bagi 2018–2026: sedikit lebih tepat berbanding menganggap harga kekal sama, dengan julat 80% yang tepat 81% daripada masa."
@@ -726,94 +831,83 @@ def render_home(t, lang):
         - Ini merupakan **projek penyelidikan bebas** — dan tidak mempunyai sebarang kaitan dengan DOSM, BNM, atau mana-mana agensi kerajaan.
         """
 
-    # ── hero section ──────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div style='text-align:center; padding: 40px 20px 20px 20px;'>
-        <div style='font-size:3rem;'>🇲🇾</div>
-        <h1 style='color:#1F4E79; font-size:2.2rem; margin-bottom:8px;'>
-            {hero_title}
-        </h1>
-        <p style='color:#64748b; font-size:1.1rem; max-width:620px; margin:0 auto;'>
-            {hero_sub}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── hero ─────────────────────────────────────────────────────────────────
+    H = {
+        "en": dict(
+            headline="Your inflation isn't the national average",
+            sub="Enter what you spend each month. See what it will cost in 3, 6 or 12 months, in ringgit, "
+                "and which category is rising fastest for you.",
+            cta="Calculate my forecast", official="Official inflation, year to {month}: {pct}%",
+            example="Example: same month, different reality", official_row="Official headline",
+            food_row="Heavy food spender", housing_row="Heavy housing spender",
+            illustrative="Illustrative figures.", open_calc="Open the calculator", open_reloc="Open the planner",
+            model_title="Forecast model"),
+        "ms": dict(
+            headline="Inflasi anda bukan purata kebangsaan",
+            sub="Masukkan perbelanjaan bulanan anda. Lihat kosnya dalam 3, 6 atau 12 bulan, dalam ringgit, "
+                "dan kategori yang paling pantas naik untuk anda.",
+            cta="Kira unjuran saya", official="Inflasi rasmi, setahun hingga {month}: {pct}%",
+            example="Contoh: bulan sama, realiti berbeza", official_row="Angka rasmi",
+            food_row="Perbelanjaan makanan tinggi", housing_row="Perbelanjaan perumahan tinggi",
+            illustrative="Angka ilustrasi.", open_calc="Buka kalkulator", open_reloc="Buka perancang",
+            model_title="Model ramalan"),
+    }[lang]
 
-    st.divider()
+    headline_data = fetch_headline_inflation()
+    eyebrow = ""
+    if headline_data and headline_data.get("headline_inflation_pct") is not None:
+        eyebrow = "<div class='mi-eyebrow'>" + H["official"].format(
+            month=month_label(headline_data.get("latest_date", ""), lang),
+            pct=f"{headline_data['headline_inflation_pct']:.1f}") + "</div>"
 
-    # ── what is personal inflation ─────────────────────────────────────────────
-    st.subheader(section1_title)
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.markdown(f"""
-        {section1_body}
-        """)
-
-    with col2:
-        st.markdown(f"""
-        <div style='background:#EFF6FF; border-left:4px solid #1F4E79;
-                    border-radius:8px; padding:16px 20px;'>
-            <b style='color:#1F4E79'>{example_label}</b><br><br>
-            {example_body}
-        </div>
-        """, unsafe_allow_html=True)
+    left, right = st.columns([1.15, 1], gap="large")
+    with left:
+        # one unindented block with no blank lines: markdown would read either as code
+        st.markdown(f"<div class='mi-hero'>{eyebrow}<h1>{H['headline']}</h1><p>{H['sub']}</p></div>",
+                    unsafe_allow_html=True)
+        st.button(H["cta"], type="primary", key="hero_cta", on_click=go_to_page, args=(2, lang))
+    with right:
+        def row(label, value, width, colour, value_colour="#2C2C2A"):
+            return (f"<div class='mi-row'><span>{label}</span><span style='color:{value_colour}'>{value}</span></div>"
+                    f"<div class='mi-bar' style='background:{colour}; width:{width}%'></div>")
+        st.markdown(
+            "<div class='mi-compare'>"
+            f"<div class='mi-title'>{H['example']}</div>"
+            + row(H["official_row"], "2.1%", 62, "#B4B2A9")
+            + row(H["food_row"], "2.8%", 82, "#0C447C", "#A32D2D")
+            + row(H["housing_row"], "1.7%", 50, "#85B7EB")
+            + f"<div class='mi-note'>{H['illustrative']}</div></div>",
+            unsafe_allow_html=True)
 
     st.divider()
 
     # ── what you can do ────────────────────────────────────────────────────────
     st.subheader(section2_title)
+    col_a, col_b = st.columns(2, gap="medium")
+    with col_a:
+        with st.container(border=True):
+            st.markdown(f"#### {card1_title}\n\n{card1_body}\n\n**{card1_best}**")
+            st.button(H["open_calc"], key="card_calc", on_click=go_to_page, args=(2, lang))
+    with col_b:
+        with st.container(border=True):
+            st.markdown(f"#### {card2_title}\n\n{card2_body}\n\n**{card2_best}**")
+            st.button(H["open_reloc"], key="card_reloc", on_click=go_to_page, args=(3, lang))
 
-    st.markdown(f"""
-     <div style='display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:stretch;'>
-        <div style='background:#F8FAFC; border:1px solid #E2E8F0;
-                    border-radius:12px; padding:24px; height:100%;
-                    box-sizing:border-box;'>
-            <div style='font-size:2rem'>📊</div>
-            <h3 style='color:#1F4E79; margin:8px 0;'>{card1_title}</h3>
-            <p style='color:#475569;'>
-                {card1_body}
-            </p>
-            <p style='color:#1F4E79; font-weight:600'>
-                {card1_best}
-            </p>
-        </div>
-        <div style='background:#F8FAFC; border:1px solid #E2E8F0;
-                    border-radius:12px; padding:24px; height:100%;
-                    box-sizing:border-box;'>
-            <div style='font-size:2rem'>🗺️</div>
-            <h3 style='color:#1F4E79; margin:8px 0;'>{card2_title}</h3>
-            <p style='color:#475569;'>
-                {card2_body}
-            </p>
-            <p style='color:#1F4E79; font-weight:600'>
-                {card2_best}
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.divider()
+
+    # ── what is personal inflation ─────────────────────────────────────────────
+    st.subheader(section1_title)
+    st.markdown(section1_body)
 
     st.divider()
 
     # ── how to use ────────────────────────────────────────────────────────────
     st.subheader(howto_header)
-
     st.markdown(f"""
-    <div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; align-items:stretch;'>
-        <div style='text-align:center; padding:16px; height:100%; box-sizing:border-box;'>
-            <div style='font-size:2.5rem'>1️⃣</div>
-            <h4 style='color:#1F4E79'>{step1_title}</h4>
-            <p style='color:#475569; font-size:0.9rem'>{step1_body}</p>
-        </div>
-        <div style='text-align:center; padding:16px; height:100%; box-sizing:border-box;'>
-            <div style='font-size:2.5rem'>2️⃣</div>
-            <h4 style='color:#1F4E79'>{step2_title}</h4>
-            <p style='color:#475569; font-size:0.9rem'>{step2_body}</p>
-        </div>
-        <div style='text-align:center; padding:16px; height:100%; box-sizing:border-box;'>
-            <div style='font-size:2.5rem'>3️⃣</div>
-            <h4 style='color:#1F4E79'>{step3_title}</h4>
-            <p style='color:#475569; font-size:0.9rem'>{step3_body}</p>
-        </div>
+    <div class='mi-grid'>
+        <div class='mi-step'><span class='mi-step-n'>1</span><h4>{step1_title}</h4><p>{step1_body}</p></div>
+        <div class='mi-step'><span class='mi-step-n'>2</span><h4>{step2_title}</h4><p>{step2_body}</p></div>
+        <div class='mi-step'><span class='mi-step-n'>3</span><h4>{step3_title}</h4><p>{step3_body}</p></div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -821,26 +915,12 @@ def render_home(t, lang):
 
     # ── data and model ────────────────────────────────────────────────────────
     st.subheader(data_header)
-
-    st.markdown(f"""{data_intro}""")
-
+    st.markdown(data_intro)
     st.markdown(f"""
-    <div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; align-items:stretch;'>
-        <div style='background:#ECFDF5; padding:16px; border-radius:8px;
-                    border:1px solid #D1FAE5; height:100%; box-sizing:border-box;'>
-            <b style='color:#065F46'>📊 DOSM</b><br>
-            <span style='color:#475569; font-size:0.9rem'>{dosm_body}</span>
-        </div>
-        <div style='background:#EFF6FF; padding:16px; border-radius:8px;
-                    border:1px solid #BFDBFE; height:100%; box-sizing:border-box;'>
-            <b style='color:#1E40AF'>🏦 Bank Negara Malaysia</b><br>
-            <span style='color:#475569; font-size:0.9rem'>{bnm_body}</span>
-        </div>
-        <div style='background:#FFF7ED; padding:16px; border-radius:8px;
-                    border:1px solid #FED7AA; height:100%; box-sizing:border-box;'>
-            <b style='color:#92400E'>🤖 {"XGBoost ML Model" if lang=="en" else "Model ML XGBoost"}</b><br>
-            <span style='color:#475569; font-size:0.9rem'>{model_body}</span>
-        </div>
+    <div class='mi-grid'>
+        <div class='mi-card'><b>DOSM</b>{dosm_body}</div>
+        <div class='mi-card'><b>Bank Negara Malaysia</b>{bnm_body}</div>
+        <div class='mi-card'><b>{H["model_title"]}</b>{model_body}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -852,17 +932,14 @@ def render_home(t, lang):
 
     st.divider()
 
-    # ── CTA ───────────────────────────────────────────────────────────────────
-    st.markdown(f"""
-    <div style='text-align:center; padding:20px;'>
-        <p style='color:#475569; font-size:1rem; margin-bottom:16px;'>
-            {ready_text}
-        </p>
-        <p style='color:#1F4E79; font-weight:600; font-size:1.1rem;'>
-            {cta_text}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
+    # ── closing action ────────────────────────────────────────────────────────
+    st.markdown(f"<p style='text-align:center; color:#5F5E5A; margin-bottom:8px'>{ready_text}</p>",
+                unsafe_allow_html=True)
+    _, middle, _ = st.columns([1, 1, 1])
+    with middle:
+        st.button(H["cta"], type="primary", key="closing_cta", on_click=go_to_page, args=(2, lang),
+                  use_container_width=True)
+
 
 def calculate_budget_forecast(
     state: str,
@@ -1207,7 +1284,7 @@ def render_personal_calculator(t: dict, lang: str):
     st.caption(caption_text)
 
     # ── Report header — gives the output a clear name and identity ─────────
-    report_title = "📄 Your Personal Inflation Report" if lang == "en" else "📄 Laporan Inflasi Peribadi Anda"
+    report_title = "Your Personal Inflation Report" if lang == "en" else "Laporan Inflasi Peribadi Anda"
     st.subheader(report_title)
 
     # ── Plain-language interpretation — tells the user what the number means ─
@@ -1227,7 +1304,7 @@ def render_personal_calculator(t: dict, lang: str):
             if lang == "en" else
             "Perbandingan rasmi tidak tersedia buat masa ini — ramalan anda dipaparkan di bawah."
         )
-        interp_color = "#475569"
+        interp_color = "#444441"
     elif gap < 0.5:
         interpretation = (
             "Your personal inflation is close to the national average — no urgent action needed, but it's worth keeping an eye on the category flagged below."
@@ -1292,8 +1369,8 @@ def render_personal_calculator(t: dict, lang: str):
 
     st.divider()
 
-    # ── prescriptive insight — auto-generated suggestion ────────────────────
-    insight_data = fetch_prescriptive_insight("personal_calculator", {
+    # ── AI suggestion — only generated when the user asks ────────────────────
+    render_insight("personal_calculator", {
         # the category adding the most RM, which is what pressures the budget
         "biggest_leak_name": result["pressure"][0]["name"],
         "biggest_leak_pct": result["pressure"][0]["change_pct"],
@@ -1301,24 +1378,7 @@ def render_personal_calculator(t: dict, lang: str):
         "current_surplus": result["current_surplus"],
         "projected_surplus": result["projected_surplus"],
         "horizon_months": horizon_months,
-    })
-
-    if insight_data and insight_data.get("insight"):
-        insight_label = "💡 What you could consider" if lang == "en" else "💡 Apa yang boleh anda pertimbangkan"
-        ai_disclaimer = (
-            "This suggestion is generated by AI (Google Gemini) based on your numbers — it is general guidance, not financial advice."
-            if lang == "en" else
-            "Cadangan ini dijana oleh AI (Google Gemini) berdasarkan angka anda — ia adalah panduan umum, bukan nasihat kewangan."
-        )
-        st.markdown(f"""
-        <div style='background:#F0F9FF; border:1px solid #BAE6FD; border-radius:10px;
-                    padding:16px 20px; margin:16px 0;'>
-            <b style='color:#0369A1'>{insight_label}</b><br><br>
-            <span style='color:#0C4A6E'>{insight_data["insight"]}</span>
-            <hr style='border:none; border-top:1px solid #BAE6FD; margin:12px 0 8px 0;'>
-            <span style='font-size:0.78rem; color:#64748B; font-style:italic;'>🤖 {ai_disclaimer}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    }, lang)
 
     low_pct = (result["total_projected_low"] / result["total_current"] - 1) * 100
     high_pct = (result["total_projected_high"] / result["total_current"] - 1) * 100
@@ -1327,7 +1387,7 @@ def render_personal_calculator(t: dict, lang: str):
         direction_word = ("higher" if personal > headline_pct else "lower") if lang == "en" else ("lebih tinggi" if personal > headline_pct else "lebih rendah")
         validation_color = "#dc2626" if personal > headline_pct else "#16a34a"
     else:
-        validation_color = "#475569"
+        validation_color = "#444441"
 
     if lang == "en":
         past_text = (
@@ -1408,9 +1468,9 @@ def render_personal_calculator(t: dict, lang: str):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     footer_note = (
-        "⚠️ Forecasts are only modestly better than assuming prices stay the same, and the shaded 80% range widens further ahead. Treat them as a guide, not a guarantee."
+        "Forecasts are only modestly better than assuming prices stay the same, and the shaded 80% range widens further ahead. Treat them as a guide, not a guarantee."
         if lang == "en" else
-        "⚠️ Unjuran hanya sedikit lebih baik berbanding menganggap harga kekal sama, dan julat 80% yang berlorek melebar apabila tempoh semakin jauh. Jadikannya panduan, bukan jaminan."
+        "Unjuran hanya sedikit lebih baik berbanding menganggap harga kekal sama, dan julat 80% yang berlorek melebar apabila tempoh semakin jauh. Jadikannya panduan, bukan jaminan."
     )
     st.caption(footer_note)
 
@@ -1418,12 +1478,12 @@ def render_personal_calculator(t: dict, lang: str):
 
     # ── Ask About This App — chat interface, visually distinct ─────────────
     st.markdown(f"""
-    <div style='background:#FDF4FF; border:1px solid #F0ABFC; border-radius:12px;
+    <div style='background:#F1EFE8; border:1px solid #D3D1C7; border-radius:12px;
                 padding:20px 24px; margin:16px 0 8px 0;'>
-        <h3 style='color:#86198F; margin:0 0 4px 0;'>
-            💬 {"Ask Anything" if lang == "en" else "Tanya Apa Sahaja"}
+        <h3 style='color:#0C447C; margin:0 0 4px 0;'>
+            {"Ask Anything" if lang == "en" else "Tanya Apa Sahaja"}
         </h3>
-        <p style='color:#701A75; font-size:0.9rem; margin:0;'>
+        <p style='color:#2C2C2A; font-size:0.9rem; margin:0;'>
             {"Ask about your forecast, or how any part of this app works — powered by AI, grounded in your real data." if lang == "en" else "Tanya tentang unjuran anda, atau bagaimana mana-mana bahagian aplikasi ini berfungsi — dikuasakan AI, berdasarkan data sebenar anda."}
         </p>
     </div>
@@ -1467,7 +1527,7 @@ def render_personal_calculator(t: dict, lang: str):
                 st.session_state.ask_chat_history.append({"role": "assistant", "content": error_msg})
             else:
                 st.write(ask_result["answer"])
-                ai_note = "🤖 AI-generated, grounded in retrieved app knowledge and your data where relevant." if lang == "en" else "🤖 Dijana AI, berdasarkan pengetahuan aplikasi dan data anda jika relevan."
+                ai_note = "AI-generated, grounded in retrieved app knowledge and your data where relevant." if lang == "en" else "Dijana AI, berdasarkan pengetahuan aplikasi dan data anda jika relevan."
                 st.caption(ai_note)
                 st.session_state.ask_chat_history.append({"role": "assistant", "content": ask_result["answer"]})
 
@@ -1493,16 +1553,16 @@ def render_relocation_planner(t: dict, lang: str):
         suggested_header = "Suggested spending in your new state"
         suggested_caption = "Starting point: your {origin} spending scaled by how much more or less the average household spends in {dest} (DOSM HIES 2022). That difference reflects lifestyle and income as well as prices, so adjust each amount to what you expect to spend."
         editable_label = "Your destination budget (editable):"
-        compare_button_text = "🔍 Compare full forecast"
+        compare_button_text = "Compare full forecast"
         compare_hint = "Click above to run the full multi-month comparison."
         warning_zero = "Set at least one destination spending amount above."
         spinner_text = "Forecasting {n} months for both states..."
         error_text = "Could not generate forecasts. Please try again."
-        summary_title = "📊 Relocation Summary"
+        summary_title = "Relocation Summary"
         salary_needed_label = "Recommended minimum salary in {state}:"
         category_compare_header = "Category-by-category comparison"
         show_more_text = "Show {n} more categories"
-        disclaimer_text = "⚠️ Destination amounts start from the difference in average household spending between the two states (HIES 2022) and are yours to adjust. Each state's prices are then forecast forward separately; treat further-out months as directional, not exact."
+        disclaimer_text = "Destination amounts start from the difference in average household spending between the two states (HIES 2022) and are yours to adjust. Each state's prices are then forecast forward separately; treat further-out months as directional, not exact."
     else:
         page_caption = "Bandingkan kos sara hidup sebenar anda antara dua negeri di Malaysia, dalam unit Ringgit — menggunakan data rasmi DOSM dan BNM"
         moving_from_label = "Berpindah dari:"
@@ -1510,16 +1570,16 @@ def render_relocation_planner(t: dict, lang: str):
         suggested_header = "Cadangan perbelanjaan di negeri baharu anda"
         suggested_caption = "Titik permulaan: perbelanjaan {origin} anda dilaraskan mengikut perbezaan purata perbelanjaan isi rumah di {dest} (HIES DOSM 2022). Perbezaan ini mencerminkan gaya hidup dan pendapatan, bukan harga sahaja, jadi laraskan setiap jumlah mengikut jangkaan perbelanjaan anda."
         editable_label = "Belanjawan destinasi anda (boleh disunting):"
-        compare_button_text = "🔍 Bandingkan unjuran penuh"
+        compare_button_text = "Bandingkan unjuran penuh"
         compare_hint = "Klik butang di atas untuk menjana perbandingan penuh bagi beberapa bulan."
         warning_zero = "Sila tetapkan sekurang-kurangnya satu jumlah perbelanjaan destinasi di atas."
         spinner_text = "Menjana unjuran {n} bulan untuk kedua-dua negeri..."
         error_text = "Unjuran tidak dapat dijana. Sila cuba lagi."
-        summary_title = "📊 Ringkasan Perpindahan"
+        summary_title = "Ringkasan Perpindahan"
         salary_needed_label = "Gaji minimum yang disyorkan di {state}:"
         category_compare_header = "Perbandingan mengikut kategori"
         show_more_text = "Papar {n} kategori lagi"
-        disclaimer_text = "⚠️ Jumlah destinasi bermula daripada perbezaan purata perbelanjaan isi rumah antara dua negeri (HIES 2022) dan boleh anda laraskan. Harga setiap negeri kemudian diunjurkan secara berasingan; jadikan bulan-bulan yang lebih jauh sebagai panduan, bukan nilai tepat."
+        disclaimer_text = "Jumlah destinasi bermula daripada perbezaan purata perbelanjaan isi rumah antara dua negeri (HIES 2022) dan boleh anda laraskan. Harga setiap negeri kemudian diunjurkan secara berasingan; jadikan bulan-bulan yang lebih jauh sebagai panduan, bukan nilai tepat."
     
     category_labels = CATEGORIES if lang == "en" else CATEGORY_NAMES_MS
     st.title(t["relocation_title"])
@@ -1544,10 +1604,10 @@ def render_relocation_planner(t: dict, lang: str):
 
     with col_origin:
         st.markdown(f"""
-        <div style='background:#EFF6FF; border:1px solid #BFDBFE; border-radius:8px;
+        <div style='background:#E6F1FB; border:1px solid #B5D4F4; border-radius:8px;
                     padding:10px 16px; height:58px; display:flex; flex-direction:column;
                     justify-content:center; box-sizing:border-box;'>
-            <span style='font-size:0.8rem; color:#1E40AF; font-weight:600'>{moving_from_label}</span>
+            <span style='font-size:0.8rem; color:#0C447C; font-weight:600'>{moving_from_label}</span>
             <span style='font-size:1.05rem; color:#1A1A1A;'>{origin_state}</span>
         </div>
         """, unsafe_allow_html=True)
@@ -1555,7 +1615,7 @@ def render_relocation_planner(t: dict, lang: str):
     with col_arrow:
         st.markdown(
             "<div style='text-align:center;font-size:1.6rem;height:58px;"
-            "display:flex;align-items:center;justify-content:center;color:#94A3B8;'>→</div>",
+            "display:flex;align-items:center;justify-content:center;color:#5F5E5A;'>→</div>",
             unsafe_allow_html=True,
         )
 
@@ -1584,16 +1644,16 @@ def render_relocation_planner(t: dict, lang: str):
     st.subheader(suggested_header)
     st.caption(suggested_caption.format(origin=origin_state, dest=destination_state))
 
-    fetch_ratios_label = "📊 Get Suggested Spending" if lang == "en" else "📊 Dapatkan Cadangan Perbelanjaan"
+    fetch_ratios_label = "Get Suggested Spending" if lang == "en" else "Dapatkan Cadangan Perbelanjaan"
     fetch_ratios_hint = (
         "Confirm your destination state above, then click here to see auto-scaled spending suggestions."
         if lang == "en" else
         "Sahkan negeri destinasi anda di atas, kemudian klik di sini untuk melihat cadangan perbelanjaan yang dianggarkan secara automatik."
     )
     ratios_changed_hint = (
-        "⚠️ You've changed your destination or horizon — the suggestions below are for your previous choice. Click above to refresh."
+        "You've changed your destination or horizon — the suggestions below are for your previous choice. Click above to refresh."
         if lang == "en" else
-        "⚠️ Anda telah menukar destinasi atau tempoh — cadangan di bawah adalah untuk pilihan sebelumnya. Klik di atas untuk kemas kini."
+        "Anda telah menukar destinasi atau tempoh — cadangan di bawah adalah untuk pilihan sebelumnya. Klik di atas untuk kemas kini."
     )
 
     current_ratio_snapshot = (origin_state, destination_state, tuple(sorted(active_spending.items())))
@@ -1710,9 +1770,9 @@ def render_relocation_planner(t: dict, lang: str):
         st.stop()
 
     changed_hint_reloc = (
-        "⚠️ You've changed your inputs — the comparison below is based on your previous numbers. Click Compare again to refresh it."
+        "You've changed your inputs — the comparison below is based on your previous numbers. Click Compare again to refresh it."
         if lang == "en" else
-        "⚠️ Anda telah menukar input — perbandingan di bawah adalah berdasarkan angka sebelumnya. Klik Bandingkan semula untuk mengemas kininya."
+        "Anda telah menukar input — perbandingan di bawah adalah berdasarkan angka sebelumnya. Klik Bandingkan semula untuk mengemas kininya."
     )
 
     current_reloc_snapshot = (
@@ -1810,12 +1870,12 @@ def render_relocation_planner(t: dict, lang: str):
 
     # ── Ask About This App — chat interface, visually distinct ─────────────
     st.markdown(f"""
-    <div style='background:#FDF4FF; border:1px solid #F0ABFC; border-radius:12px;
+    <div style='background:#F1EFE8; border:1px solid #D3D1C7; border-radius:12px;
                 padding:20px 24px; margin:16px 0 8px 0;'>
-        <h3 style='color:#86198F; margin:0 0 4px 0;'>
-            💬 {"Ask Anything" if lang == "en" else "Tanya Apa Sahaja"}
+        <h3 style='color:#0C447C; margin:0 0 4px 0;'>
+            {"Ask Anything" if lang == "en" else "Tanya Apa Sahaja"}
         </h3>
-        <p style='color:#701A75; font-size:0.9rem; margin:0;'>
+        <p style='color:#2C2C2A; font-size:0.9rem; margin:0;'>
             {"Ask about this comparison, or how any part of this app works — powered by AI, grounded in your real data." if lang == "en" else "Tanya tentang perbandingan ini, atau bagaimana mana-mana bahagian aplikasi ini berfungsi — dikuasakan AI, berdasarkan data sebenar anda."}
         </p>
     </div>
@@ -1858,7 +1918,7 @@ def render_relocation_planner(t: dict, lang: str):
                 st.session_state.ask_chat_history_reloc.append({"role": "assistant", "content": error_msg})
             else:
                 st.write(ask_result_reloc["answer"])
-                ai_note = "🤖 AI-generated, grounded in retrieved app knowledge and your data where relevant." if lang == "en" else "🤖 Dijana AI, berdasarkan pengetahuan aplikasi dan data anda jika relevan."
+                ai_note = "AI-generated, grounded in retrieved app knowledge and your data where relevant." if lang == "en" else "Dijana AI, berdasarkan pengetahuan aplikasi dan data anda jika relevan."
                 st.caption(ai_note)
                 st.session_state.ask_chat_history_reloc.append({"role": "assistant", "content": ask_result_reloc["answer"]})
 
@@ -1899,30 +1959,13 @@ def render_relocation_planner(t: dict, lang: str):
     </div>
     """, unsafe_allow_html=True)
 
-    reloc_insight_data = fetch_prescriptive_insight("relocation_planner", {
+    render_insight("relocation_planner", {
         "origin_state": origin_state,
         "destination_state": destination_state,
         "cost_diff_rm": cost_diff_rm,
         "salary_needed": salary_needed,
         "horizon_months": horizon_months,
-    })
-
-    if reloc_insight_data and reloc_insight_data.get("insight"):
-        insight_label = "💡 What you could consider" if lang == "en" else "💡 Apa yang boleh anda pertimbangkan"
-        ai_disclaimer = (
-            "This suggestion is generated by AI (Google Gemini) based on your numbers above — it is general guidance, not financial advice."
-            if lang == "en" else
-            "Cadangan ini dijana oleh AI (Google Gemini) berdasarkan angka anda di atas — ia adalah panduan umum, bukan nasihat kewangan."
-        )
-        st.markdown(f"""
-        <div style='background:#F0F9FF; border:1px solid #BAE6FD; border-radius:10px;
-                    padding:16px 20px; margin:16px 0;'>
-            <b style='color:#0369A1'>{insight_label}</b><br><br>
-            <span style='color:#0C4A6E'>{reloc_insight_data["insight"]}</span>
-            <hr style='border:none; border-top:1px solid #BAE6FD; margin:12px 0 8px 0;'>
-            <span style='font-size:0.78rem; color:#64748B; font-style:italic;'>🤖 {ai_disclaimer}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    }, lang)
 
     st.divider()
 
@@ -1969,12 +2012,12 @@ def render_relocation_planner(t: dict, lang: str):
         fig.add_trace(go.Scatter(
             x=steps, y=comp["origin_amounts"],
             mode="lines+markers", name=origin_state,
-            line=dict(color="#64748b", width=2, dash="dot"),
+            line=dict(color="#5F5E5A", width=2, dash="dot"),
         ))
         fig.add_trace(go.Scatter(
             x=steps, y=comp["dest_amounts"],
             mode="lines+markers", name=destination_state,
-            line=dict(color="#1F4E79", width=3),
+            line=dict(color="#0C447C", width=3),
         ))
         fig.update_layout(
             title=comp["category_name"],
@@ -1995,12 +2038,12 @@ def render_relocation_planner(t: dict, lang: str):
                 fig.add_trace(go.Scatter(
                     x=steps, y=comp["origin_amounts"],
                     mode="lines+markers", name=origin_state,
-                    line=dict(color="#64748b", width=2, dash="dot"),
+                    line=dict(color="#5F5E5A", width=2, dash="dot"),
                 ))
                 fig.add_trace(go.Scatter(
                     x=steps, y=comp["dest_amounts"],
                     mode="lines+markers", name=destination_state,
-                    line=dict(color="#1F4E79", width=3),
+                    line=dict(color="#0C447C", width=3),
                 ))
                 fig.update_layout(
                     title=comp["category_name"],
@@ -2081,7 +2124,7 @@ def render_data_explorer(t, lang):
     if state_lb_data:
         state_names = [s["state"] for s in state_lb_data["states"]]
         state_values = [s["yoy_change_pct"] for s in state_lb_data["states"]]
-        highlight_colors = ["#1F4E79" if s == state else "#94A3B8" for s in state_names]
+        highlight_colors = ["#0C447C" if s == state else "#5F5E5A" for s in state_names]
 
         fig_state_lb = go.Figure(go.Bar(
             x=state_values, y=state_names, orientation="h",
@@ -2152,11 +2195,11 @@ def render_data_explorer(t, lang):
     fig_cpi = go.Figure()
     fig_cpi.add_trace(go.Scatter(
         x=dates, y=[row["cpi_index"] for row in series],
-        mode="lines", name="CPI Index", line=dict(color="#64748b", width=1.5),
+        mode="lines", name="CPI Index", line=dict(color="#5F5E5A", width=1.5),
     ))
     fig_cpi.add_trace(go.Scatter(
         x=dates, y=[row["cpi_ma_3"] for row in series],
-        mode="lines", name="3-month average", line=dict(color="#1F4E79", width=3),
+        mode="lines", name="3-month average", line=dict(color="#0C447C", width=3),
     ))
 
      # ── known economic events, marked only if they fall within the visible date range ──
@@ -2225,7 +2268,7 @@ def render_data_explorer(t, lang):
     fig_ppi = go.Figure()
     fig_ppi.add_trace(go.Scatter(
         x=dates, y=[row["cpi_index"] for row in series],
-        mode="lines", name="CPI (consumer)", line=dict(color="#1F4E79", width=2.5),
+        mode="lines", name="CPI (consumer)", line=dict(color="#0C447C", width=2.5),
     ))
     fig_ppi.add_trace(go.Scatter(
         x=dates, y=[row["ppi_index"] for row in series],
@@ -2251,7 +2294,7 @@ def render_data_explorer(t, lang):
     fig_opr = go.Figure()
     fig_opr.add_trace(go.Scatter(
         x=dates, y=[row["cpi_ma_3"] for row in series],
-        mode="lines", name="CPI trend", line=dict(color="#1F4E79", width=2.5), yaxis="y1",
+        mode="lines", name="CPI trend", line=dict(color="#0C447C", width=2.5), yaxis="y1",
     ))
     fig_opr.add_trace(go.Scatter(
         x=dates, y=[row["opr_rate"] for row in series],
@@ -2310,7 +2353,7 @@ def main():
         "Ramalan: gabungan ETS + XGBoost, diuji semula atas data CPI 2018–2026 | Dibina oleh Muhammad Ammar Ahmad Zaki"
     )
     st.markdown(f"""
-    <div style='text-align:center;color:#94a3b8;font-size:0.8rem;padding:10px'>
+    <div style='text-align:center;color:#5F5E5A;font-size:0.8rem;padding:10px'>
         {footer_text}
     </div>
     """, unsafe_allow_html=True)
