@@ -60,11 +60,6 @@ resource "google_cloud_run_v2_service" "api" {
         value = var.project_id
       }
 
-      env {
-        name  = "MODEL_GCS_PATH"
-        value = "models/cpi_forecast_20260619_194024.joblib"
-      }
-
       # Calls carrying this token (the evaluation run) are logged; nothing else is.
       env {
         name = "EVAL_LOG_TOKEN"

@@ -80,7 +80,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("backtest")
 
-# ── Production constants (keep in sync with train.py / api.py) ───────────────
+# ── Constants of the original model (train.py, since removed) ────────────────
 
 FEATURES = [
     "cpi_lag_1", "cpi_lag_3", "cpi_lag_6", "cpi_lag_12",

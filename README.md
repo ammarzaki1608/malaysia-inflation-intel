@@ -94,7 +94,7 @@ Forecast table and scorecard already in memory
 Grounded answer, with the retrieved entries and every tool result returned for traceability
 ```
 
-**Tool calling.** The model decides for itself whether a question needs data. It is given four tools (plain Python functions in `api.py`) and replies either with an answer or with a request such as `get_forecast(state="Kedah", category="Transport", horizon_months=6)`. The API runs the function, sends the result back, and the model writes its answer from it.
+**Tool calling.** The model decides for itself whether a question needs data. It is given four tools (plain Python functions in `service/chat_tools.py`) and replies either with an answer or with a request such as `get_forecast(state="Kedah", category="Transport", horizon_months=6)`. The API runs the function, sends the result back, and the model writes its answer from it.
 
 This replaced a keyword list that guessed whether a question was about "my forecast", and could only ever supply the one forecast open in the app. The chatbot can now answer questions the old version could not: "Is transport rising faster in Selangor or Johor?", "Which category will rise most in Kedah?", "How have the forecasts performed so far?".
 
@@ -192,7 +192,7 @@ How to read this: the two retrieval rows are exact counts and the most trustwort
 | Storage | Google Cloud Storage (GCS), BigQuery, Secret Manager |
 | Ingestion | Python, pandas, requests, google-cloud-bigquery |
 | Transformation | dbt, SQL (BigQuery dialect) |
-| ML Training | XGBoost, statsforecast (AutoETS), scikit-learn (Prophet, SHAP and MLflow only in the legacy `train.py`) |
+| ML Training | XGBoost, statsforecast (AutoETS), scikit-learn |
 | GenAI / RAG | Gemini API (gemini-embedding-001, gemini-3.1-flash-lite), FAISS |
 | Serving | FastAPI, uvicorn, joblib, slowapi (rate limiting) |
 | Frontend | Streamlit (bilingual EN/BM), Plotly |
@@ -235,10 +235,16 @@ malaysia-inflation-intel/
 ├── ml/
 │   ├── training/
 │   │   ├── backtest.py          # rolling-origin backtest, models, leakage self-test
-│   │   ├── forecast_batch.py    # monthly: train, calibrate ranges, publish forecasts + scorecard
-│   │   └── prepare_features.py, train.py   # legacy recursive model (API fallback only)
+│   │   └── forecast_batch.py    # monthly: train, calibrate ranges, publish forecasts + scorecard
 │   └── serving/
-│       ├── api.py               # FastAPI — forecast, RAG, leaderboard endpoints
+│       ├── api.py               # FastAPI entry point and the data endpoints
+│       ├── service/
+│       │   ├── config.py            # settings, states, categories, rate limiter
+│       │   ├── data.py              # every BigQuery query
+│       │   ├── forecasts.py         # precomputed forecast table + scorecard
+│       │   ├── chat.py              # /ask and /prescriptive-insight
+│       │   ├── chat_tools.py        # the tools the chatbot can call
+│       │   └── llm_log.py           # LLM call logging (evaluation traffic only)
 │       ├── rag/
 │       │   ├── knowledge_base.py    # 27 hand-curated entries
 │       │   ├── build_index.py       # embeds corpus → FAISS index → GCS
@@ -291,7 +297,7 @@ cd ml/training
 python forecast_batch.py                      # trains, calibrates ranges, uploads forecasts/latest.json to GCS
 # offline: python forecast_batch.py --source files --data-dir ../../data --local-out forecasts.json
 ```
-This runs automatically every month as step 4 of the pipeline job. `train.py` is the legacy recursive model, kept only as the API's fallback.
+This runs automatically every month as step 4 of the pipeline job. The API only serves the published table; no model runs inside it.
 
 ### 4 — Build the RAG index (one-time, or after editing knowledge_base.py)
 ```bash
