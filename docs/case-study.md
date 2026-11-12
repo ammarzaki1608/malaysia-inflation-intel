@@ -1,6 +1,6 @@
 # Case study: my model was 97% accurate, until I tested it properly
 
-**Malaysia Personal Inflation Intelligence** forecasts consumer prices for 16 states × 13 spending categories. It turns those forecasts into a personal inflation rate for each user. This is the story of how I found that my headline metrics were wrong, proved it, and rebuilt the model so its claims hold up.
+**Real Ringgit** forecasts consumer prices for 16 states × 13 spending categories. It turns those forecasts into a personal inflation rate for each user. This is the story of how I found that my headline metrics were wrong, proved it, and rebuilt the model so its claims hold up.
 
 **TL;DR**
 - I published **MAE 0.73 and 97% directional accuracy**.

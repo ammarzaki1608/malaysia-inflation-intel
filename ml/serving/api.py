@@ -1,5 +1,5 @@
 """
-FastAPI service for Malaysia Inflation Intelligence.
+FastAPI service for Real Ringgit (personal inflation forecasts for Malaysia).
 
 Serves CPI forecasts precomputed monthly by ml/training/forecast_batch.py
 (ETS + direct-growth XGBoost average, with 80% ranges calibrated on backtest
@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Malaysia Inflation Intelligence API",
+    title="Real Ringgit API",
     description="Predicts personal CPI inflation for Malaysian citizens",
     version="1.0.0",
     lifespan=lifespan,
