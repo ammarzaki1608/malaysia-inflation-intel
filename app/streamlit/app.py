@@ -367,7 +367,7 @@ def fetch_ask_answer(question: str, state: str, division: str | None, horizon_mo
         if division:
             payload["division"] = division
 
-        response = httpx.post(f"{API_URL}/ask", json=payload, timeout=30.0)
+        response = httpx.post(f"{API_URL}/ask", json=payload, timeout=60.0)   # up to 3 model calls when tools are used
         response.raise_for_status()
         return response.json()
     except httpx.TimeoutException:

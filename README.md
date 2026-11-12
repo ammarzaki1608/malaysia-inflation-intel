@@ -83,29 +83,52 @@ FAISS flat L2 index  ←── stored in GCS, loaded once at API startup
         │
         │  live question ──► embedded via gemini-embedding-001 (RETRIEVAL_QUERY)
         ▼
-Top-k retrieval  +  live forecast data (only if the question needs it)
+Top-k retrieval  (always)
         ▼
 gemini-3.1-flash-lite  ←── temperature 0.3, strict "never invent facts" system instruction
+        │  ▲
+        │  │  tool calls, when the question needs numbers (at most 2 rounds):
+        ▼  │  get_forecast · rank_categories · rank_states · get_forecast_accuracy
+Forecast table and scorecard already in memory
         ▼
-Grounded answer, with retrieved-context IDs returned for traceability
+Grounded answer, with the retrieved entries and every tool result returned for traceability
 ```
 
-**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 22-question test set (17 English, 5 Bahasa Malaysia; 3 out-of-scope) in two layers.
+**Tool calling.** The model decides for itself whether a question needs data. It is given four tools (plain Python functions in `api.py`) and replies either with an answer or with a request such as `get_forecast(state="Kedah", category="Transport", horizon_months=6)`. The API runs the function, sends the result back, and the model writes its answer from it.
+
+This replaced a keyword list that guessed whether a question was about "my forecast", and could only ever supply the one forecast open in the app. The chatbot can now answer questions the old version could not: "Is transport rising faster in Selangor or Johor?", "Which category will rise most in Kedah?", "How have the forecasts performed so far?".
+
+| Decision | Reason |
+|---|---|
+| Plain Gemini function calling, no agent framework | Under 300 lines including the tools, no new dependency, every step visible in one function |
+| Retrieval stays automatic; only data is a tool | A general question still costs one model call, as before. Only questions that need numbers pay for a second |
+| Tools read the forecast table in memory | A tool call takes milliseconds and no database query |
+| Hard limits: 2 rounds, 6 tool calls | On the last round the model is not allowed to ask for tools, so the loop always ends |
+| Tools never raise | A bad argument comes back to the model as an error message listing the valid values, so it can correct itself or tell the user |
+| Every argument is validated | States and categories are checked against the known lists before anything is looked up |
+
+The cost: a question that needs data now takes two model calls, so roughly twice the time and tokens of a general question.
+
+**Evaluation:** a custom Gemini-based LLM-as-judge harness (built after the standard `ragas` library hit an unresolvable dependency conflict — see Known Issues below) scores answers against a versioned 30-question test set (23 English, 7 Bahasa Malaysia; 3 out-of-scope; 8 that need forecast data) in three layers.
 
 Retrieval, with no LLM involved: each question lists the knowledge-base entries that hold its answer.
 - **hit rate**: was one of them among the entries retrieved?
 - **MRR**: how near the top was it?
+
+Tool choice, also with no LLM: questions are marked with the tools that would answer them, or with "none" for general questions.
+- **tool choice accuracy**: did the chatbot call an acceptable tool, and leave the tools alone when the question needed no data?
 
 Answer quality, with one judge call per question returning all metrics as JSON:
 - **faithfulness**: no facts beyond the retrieved context
 - **answer relevancy**
 - **context precision**
 - **correctness** against the expected answer
+- for the 8 data questions, whose right answer changes every month, the judge is shown what the tools returned and scores **faithfulness** and **relevancy** only: do the answer's numbers match the data?
 - **refusal**: for out-of-scope questions, such as an exact future inflation figure or a fund recommendation, the bot must decline rather than invent
 
 A judge reply that cannot be parsed is retried once and then reported as unscored, never counted as zero; if too few questions are scored (a Gemini outage), the run is reported as incomplete, not as a pass or a fail.
 
-It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails if any judge metric averages below 0.7 or the retrieval hit rate falls below 0.8. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
+It runs in CI against the live API after every deploy that changes the API (its own workflow, `rag-eval.yml`, so a slow run never holds up the next deploy; app-only changes skip it) and fails if any judge metric averages below 0.7, the retrieval hit rate falls below 0.8, or tool choice accuracy falls below 0.7. Each run publishes its score table on the workflow's Summary page and uploads the full results, with the judge's reason for every score, as an artifact. The judge model is configurable (`JUDGE_MODEL`), so answers can be graded by a different model from the one that wrote them. If `knowledge_base.py` changes, the API re-embeds it at startup, so the chatbot never answers from stale text.
 
 ---
 
@@ -143,7 +166,7 @@ Under an honest backtest it was about 2× worse than naive. The redesign:
 
 Full tables by period and metric: `docs/backtest_report.md`.
 
-**RAG evaluation** (22 questions against the live API, 11 Nov 2026; every question was judged):
+**RAG evaluation** (22 questions against the live API, 11 Nov 2026; every question was judged). This run predates tool calling: the 8 data questions and the tool choice metric were added afterwards and have no published score here yet.
 
 | Metric | Score | Questions |
 |---|---:|---:|
@@ -332,11 +355,12 @@ How it works: the evaluation workflow sends a secret token in an `X-Eval-Token` 
 | `retrieval_ms`, `generation_ms`, `total_ms` | Where the time goes: finding context, or the model |
 | `prompt_tokens`, `output_tokens`, `total_tokens` | Cost per answer |
 | `retrieved_ids`, `retrieved_distances` | Which knowledge-base entries were used, and how close the match was |
+| `llm_calls`, `tools_called`, `tool_errors` | How many model calls the answer took, which tools it used, and how many came back as errors |
 | `status`, `error_type`, `error_message`, `finish_reason` | Failures and cut-off answers |
 | `model`, `api_revision`, `forecast_version` | Which deployment produced the answer |
 | `question`, `answer` | The test question and what the chatbot said |
 
-Because every evaluation run asks the same 22 questions, the table shows how latency, token use and retrieval change from one deployment to the next.
+Because every evaluation run asks the same questions, the table shows how latency, token use and retrieval change from one deployment to the next.
 
 Some design decisions:
 
@@ -415,7 +439,7 @@ Requires `GCP_SA_KEY` secret set in GitHub repository settings.
 
 ## Roadmap
 
-- LangGraph-based budget advisor agent (tool-calling across `/forecasts`, `/trends`, `/ask`)
+- Budget advisor that reasons over the user's own spending figures (the chatbot already calls forecast tools; this would add the user's budget as a tool)
 - Content-free latency and error metrics for real chat traffic (evaluation calls are already logged)
 - Automated model retraining gate — compare newly retrained models against the deployed one before promotion
 - Prediction logging for real-world drift monitoring

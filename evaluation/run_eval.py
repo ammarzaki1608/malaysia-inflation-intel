@@ -34,7 +34,7 @@ from datetime import datetime, timezone
 import httpx
 
 from knowledge_base_mirror import get_texts_for_ids
-from scorer import (ANSWER_METRICS, JUDGE_MODEL, REFUSAL_METRICS, RETRY_WAITS_S,
+from scorer import (ANSWER_METRICS, DATA_METRICS, JUDGE_MODEL, REFUSAL_METRICS, RETRY_WAITS_S,
                     JudgeInvalid, JudgeUnavailable, judge)
 from test_questions import TEST_QUESTIONS
 
@@ -44,6 +44,7 @@ EVAL_LOG_TOKEN = os.getenv("EVAL_LOG_TOKEN", "")
 ASK_HEADERS = {"X-Eval-Token": EVAL_LOG_TOKEN} if EVAL_LOG_TOKEN else {}
 THRESHOLD = 0.7                                                    # every judge metric's average
 RETRIEVAL_THRESHOLD = float(os.getenv("EVAL_RETRIEVAL_THRESHOLD", "0.8"))   # retrieval hit rate
+TOOL_THRESHOLD = float(os.getenv("EVAL_TOOL_THRESHOLD", "0.7"))             # tool choice accuracy
 PAUSE_S = float(os.getenv("EVAL_PAUSE_SECONDS", "5"))              # stay under Gemini rate limits
 # Stop early when Gemini is clearly down, instead of retrying every call:
 MAX_CONSECUTIVE_UNAVAILABLE = int(os.getenv("EVAL_MAX_CONSECUTIVE_UNAVAILABLE", "3"))
@@ -72,6 +73,23 @@ def retrieval_scores(retrieved_ids: list, expected_ids: list) -> dict:
     return {"hit": False, "reciprocal_rank": 0.0}
 
 
+def tool_choice_correct(called: list, expected: list) -> bool:
+    """
+    Did the chatbot pick a sensible tool? Checked without any LLM.
+    `expected` lists the acceptable tools: calling any one of them is correct.
+    An empty list means the question needs no data, so calling nothing is correct.
+    """
+    if not expected:
+        return not called
+    return any(name in expected for name in called)
+
+
+def tool_contexts(tool_results: list) -> list:
+    """Tool results as text, so the judge can check the answer's numbers against them."""
+    return [f"DATA FROM TOOL {t['name']}({json.dumps(t.get('args', {}), ensure_ascii=False)}): "
+            f"{json.dumps(t.get('result'), ensure_ascii=False)}" for t in tool_results]
+
+
 def summarise(results: list) -> dict:
     """Averages over the questions that were actually scored."""
     metrics = {}
@@ -87,13 +105,16 @@ def summarise(results: list) -> dict:
                      "mrr": sum(x["reciprocal_rank"] for x in rs) / len(rs),
                      "n": len(rs)}
 
+    ts = [r["tool_choice"] for r in results if r.get("tool_choice")]
+    tools = {"accuracy": sum(x["correct"] for x in ts) / len(ts), "n": len(ts)} if ts else None
+
     by_lang = {}
     for lang in sorted({r.get("lang", "en") for r in results}):
         sub = [r for r in results if r.get("lang", "en") == lang and "correctness" in r.get("scores", {})]
         if sub:
             by_lang[lang] = {"correctness": sum(r["scores"]["correctness"] for r in sub) / len(sub), "n": len(sub)}
 
-    return {"metrics": metrics, "retrieval": retrieval, "by_lang": by_lang,
+    return {"metrics": metrics, "retrieval": retrieval, "tools": tools, "by_lang": by_lang,
             "questions": len(results),
             "judged": sum(1 for r in results if r.get("scores")),
             "asked": sum(1 for r in results if "answer" in r)}
@@ -116,6 +137,9 @@ def verdict(summary: dict) -> tuple:
     r = summary["retrieval"]
     if r and r["hit_rate"] < RETRIEVAL_THRESHOLD:
         failed.append(f"retrieval hit rate {r['hit_rate']:.2f} < {RETRIEVAL_THRESHOLD}")
+    t = summary.get("tools")
+    if t and t["accuracy"] < TOOL_THRESHOLD:
+        failed.append(f"tool choice accuracy {t['accuracy']:.2f} < {TOOL_THRESHOLD}")
     return ("failed", failed) if failed else ("passed", [])
 
 
@@ -137,18 +161,26 @@ def to_markdown(report: dict) -> str:
         r = s["retrieval"]
         lines.append(f"| retrieval hit rate (no LLM) | {r['hit_rate']:.2f} | {r['n']} | {RETRIEVAL_THRESHOLD} |")
         lines.append(f"| retrieval MRR (no LLM) | {r['mrr']:.2f} | {r['n']} | — |")
+    if s.get("tools"):
+        t = s["tools"]
+        lines.append(f"| tool choice accuracy (no LLM) | {t['accuracy']:.2f} | {t['n']} | {TOOL_THRESHOLD} |")
     if len(s["by_lang"]) > 1:
         lines += ["", "Correctness by language: " + ", ".join(
             f"{lang} {v['correctness']:.2f} (n={v['n']})" for lang, v in s["by_lang"].items())]
 
     low = [r for r in report["results"] if any(v < THRESHOLD for v in r.get("scores", {}).values())
-           or (r.get("retrieval") and not r["retrieval"]["hit"])]
+           or (r.get("retrieval") and not r["retrieval"]["hit"])
+           or (r.get("tool_choice") and not r["tool_choice"]["correct"])]
     if low:
         lines += ["", "### Questions below threshold", ""]
         for r in low:
             bits = [f"{m} {v:.2f}" for m, v in r.get("scores", {}).items() if v < THRESHOLD]
             if r.get("retrieval") and not r["retrieval"]["hit"]:
                 bits.append("retrieval miss")
+            if r.get("tool_choice") and not r["tool_choice"]["correct"]:
+                tc = r["tool_choice"]
+                bits.append(f"tool choice: called {tc['called'] or 'nothing'}, "
+                            f"expected {' or '.join(tc['expected']) or 'nothing'}")
             lines.append(f"- **{r['question']}** — {', '.join(bits)}")
     unscored = [r for r in report["results"] if not r.get("scores")]
     if unscored:
@@ -208,10 +240,22 @@ def run_single_evaluation(test_case: dict) -> dict:
         r = record["retrieval"]
         print(f"  retrieval: {'hit' if r['hit'] else 'MISS'} (reciprocal rank {r['reciprocal_rank']:.2f})")
 
+    called = result.get("tools_called", [])
+    record["tools_called"] = called
+    if "expected_tools" in test_case:
+        record["tool_choice"] = {"correct": tool_choice_correct(called, test_case["expected_tools"]),
+                                 "called": called, "expected": test_case["expected_tools"]}
+        print(f"  tool choice: {'ok' if record['tool_choice']['correct'] else 'WRONG'} "
+              f"(called {called or 'nothing'})")
+
+    # A question that needs forecast data has no fixed right answer, so it is
+    # judged on whether the answer matches what the tools returned.
+    data_question = bool(test_case.get("expected_tools"))
+    contexts = get_texts_for_ids(result["retrieved_context"]) + tool_contexts(result.get("tool_results", []))
     try:
-        judged = judge(test_case["question"], result["answer"],
-                       get_texts_for_ids(result["retrieved_context"]),
-                       test_case["ground_truth"], expect_refusal=refusal)
+        judged = judge(test_case["question"], result["answer"], contexts,
+                       test_case["ground_truth"], expect_refusal=refusal,
+                       metrics=DATA_METRICS if data_question else None)
         record["scores"] = {m: v["score"] for m, v in judged.items()}
         record["reasons"] = {m: v["reason"] for m, v in judged.items()}
         print("  " + "  ".join(f"{m} {s:.2f}" for m, s in record["scores"].items()))
@@ -280,8 +324,10 @@ def main() -> int:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "duration_s": time.time() - started,
         "api_url": API_URL, "judge_model": JUDGE_MODEL,
-        "thresholds": {"judge_metrics": THRESHOLD, "retrieval_hit_rate": RETRIEVAL_THRESHOLD},
-        "metrics_per_case": {"answer": list(ANSWER_METRICS), "refusal": list(REFUSAL_METRICS)},
+        "thresholds": {"judge_metrics": THRESHOLD, "retrieval_hit_rate": RETRIEVAL_THRESHOLD,
+                       "tool_choice_accuracy": TOOL_THRESHOLD},
+        "metrics_per_case": {"answer": list(ANSWER_METRICS), "refusal": list(REFUSAL_METRICS),
+                             "data": list(DATA_METRICS)},
         "summary": summary, "results": results,
     }
     write_outputs(report)
@@ -296,7 +342,8 @@ def main() -> int:
     if status == "failed":
         print(f"\n❌ FAILED — {'; '.join(reasons)}")
         return 1
-    print(f"\n✅ PASSED — all metrics at or above threshold ({THRESHOLD}; retrieval {RETRIEVAL_THRESHOLD})")
+    print(f"\n✅ PASSED — all metrics at or above threshold "
+          f"({THRESHOLD}; retrieval {RETRIEVAL_THRESHOLD}; tool choice {TOOL_THRESHOLD})")
     return 0
 
 

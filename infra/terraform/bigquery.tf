@@ -67,6 +67,9 @@ resource "google_bigquery_table" "llm_calls" {
     { name = "answer", type = "STRING", mode = "NULLABLE", description = "The model's answer (/ask only)" },
     { name = "answer_chars", type = "INTEGER", mode = "NULLABLE" },
     { name = "finish_reason", type = "STRING", mode = "NULLABLE", description = "Why the model stopped (STOP, MAX_TOKENS, ...)" },
+    { name = "llm_calls", type = "INTEGER", mode = "NULLABLE", description = "Model calls made for this answer (more than 1 when tools were used)" },
+    { name = "tools_called", type = "STRING", mode = "REPEATED", description = "Tools the model asked for, in order" },
+    { name = "tool_errors", type = "INTEGER", mode = "NULLABLE", description = "Tool calls that returned an error (bad arguments, no data)" },
     { name = "error_type", type = "STRING", mode = "NULLABLE", description = "Exception class when status is error" },
     { name = "error_message", type = "STRING", mode = "NULLABLE", description = "First 500 characters of the error" },
   ])
