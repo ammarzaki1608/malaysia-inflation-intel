@@ -303,10 +303,13 @@ st.markdown("""
 
 def go_to_page(index: int) -> None:
     """
-    Button callback: switch the page menu to `index`. Only our own page state is
-    set; the menu reads it as its start value on the next run (see render_top_bar).
+    Button callback: switch the page menu to `index`. The menu's own value is set
+    too: a widget that already exists keeps its value, so changing only our page
+    state would be overridden by the menu on the next run (see render_top_bar).
     """
     st.session_state.page = index
+    for code in ("en", "ms"):
+        st.session_state[f"mode_select_{code}"] = index
 
 
 CHART_FONT = dict(family="Source Sans Pro, sans-serif", color="#2C2C2A", size=13)
@@ -647,17 +650,22 @@ def render_top_bar() -> tuple:
         except ValueError:
             page = 0
         st.session_state.page = page if 0 <= page < len(MODE_KEYS) else 0
+    # The menu's value lives in session state under a fixed key, and no `index` is passed.
+    # Streamlit 1.37 builds a widget's identity from its arguments, `index` included, so
+    # a changing `index` made the menu a different widget from run to run. Two bugs
+    # followed: a ?page=2 link sent the visitor Home on their first click, and a button
+    # that moved the page was ignored when the menu already held the old value (it then
+    # took a second click). With a fixed identity, the menu is changed in one way only:
+    # by the visitor, or by writing its key (go_to_page, or the start value below).
+    nav_key = f"mode_select_{lang}"
+    st.session_state.pop("mode_select_ms" if lang == "en" else "mode_select_en", None)
+    if nav_key not in st.session_state:                 # first run, or just switched language
+        st.session_state[nav_key] = st.session_state.page
     with col_mode:
-        # `index` must be passed on every run, with the same value the menu had when it
-        # was created. Streamlit 1.37 includes `index` in a widget's identity, so
-        # passing it only sometimes makes the menu a NEW widget on the next run, which
-        # starts at Home: that sent anyone who opened or refreshed a ?page=2 link back
-        # to Home on their first click.
         mode = st.radio(
             t["mode_label"], options=list(range(len(MODE_KEYS))),
-            index=st.session_state.page,
             format_func=lambda i: t[MODE_KEYS[i]], horizontal=True,
-            key=f"mode_select_{lang}", label_visibility="collapsed",
+            key=nav_key, label_visibility="collapsed",
         )
     st.session_state.page = mode
     st.query_params["page"] = str(mode)

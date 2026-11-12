@@ -54,6 +54,25 @@ class NavigationTests(unittest.TestCase):
         button(at, "Fill with the average for my state").click().run()       # a later click
         self.assertEqual(at.session_state.page, 2)
 
+    def test_a_button_works_on_the_first_click_after_using_the_menu(self):
+        """Regression: after going Calculator -> Home with the menu, the Home button needed two clicks."""
+        at = open_page(0)
+        button(at, "Calculate my forecast").click().run()
+        self.assertEqual(at.session_state.page, 2)
+        at.radio(key="mode_select_en").set_value(0).run()                    # back to Home with the menu
+        self.assertEqual(at.session_state.page, 0)
+        button(at, "Calculate my forecast").click().run()                    # ONE click
+        self.assertEqual(at.session_state.page, 2)
+        self.assertEqual(at.radio(key="mode_select_en").value, 2)
+
+    def test_the_cards_and_closing_button_also_work_on_the_first_click(self):
+        for label, expected in (("Open the calculator", 2), ("Open the planner", 3)):
+            at = open_page(0)
+            at.radio(key="mode_select_en").set_value(1).run()                # visit another page first
+            at.radio(key="mode_select_en").set_value(0).run()
+            button(at, label).click().run()
+            self.assertEqual(at.session_state.page, expected, label)
+
     def test_switching_language_keeps_the_page(self):
         at = open_page(2)
         at.radio(key="lang_toggle").set_value("BM").run()
