@@ -13,5 +13,13 @@ gatherUsageStats = false
 # backgrounds, so following a phone's dark-mode setting made Streamlit switch
 # text to white on those light cards (unreadable). Pinning the theme here
 # makes light the default for every visitor, whatever their OS setting.
+#
+# The palette is the app's only one: navy for brand and actions, warm greys for
+# everything else. The same colours are used in the custom CSS in app.py.
 [theme]
 base = "light"
+primaryColor = "#0C447C"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1EFE8"
+textColor = "#2C2C2A"
+font = "sans serif"
