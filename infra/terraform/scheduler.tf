@@ -41,10 +41,12 @@ resource "google_service_account" "scheduler" {
   display_name = "Cloud Scheduler - Pipeline Trigger"
 }
 
-resource "google_project_iam_member" "scheduler_run_invoker" {
-  project = var.project_id
-  role    = "roles/run.invoker"
-  member  = "serviceAccount:${google_service_account.scheduler.email}"
+resource "google_cloud_run_v2_job_iam_member" "scheduler_runs_pipeline" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_job.data_pipeline.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.scheduler.email}"
 }
 
 # ── Cloud Scheduler — triggers the job on the 3rd of every month ─────────────
