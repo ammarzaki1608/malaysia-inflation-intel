@@ -32,7 +32,8 @@ def button(at: AppTest, label: str):
 class NavigationTests(unittest.TestCase):
     def test_a_page_opened_from_a_link_stays_put_after_a_form_button(self):
         """Regression: opening ?page=2 and pressing Calculate sent the visitor back to Home."""
-        for label in ("Calculate my forecast", "Fill with the average for my state"):
+        for label in ("Calculate my forecast", "Fill with the average for my state",
+                      "Quick estimate with my state's average"):
             at = open_page(2)
             self.assertEqual(at.session_state.page, 2)
             button(at, label).click().run()
