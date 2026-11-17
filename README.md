@@ -1,8 +1,8 @@
 # Real Ringgit
 
-*Personal inflation forecasts for Malaysia*
+*A cost-of-living forecast for Malaysia: how much more will your own spending cost?*
 
-**Official inflation is one national number. Yours depends on what you spend.** This system forecasts Malaysian CPI by state and category from official DOSM and BNM data, refreshes itself every month, and turns it into a personal forecast in ringgit, in English and Bahasa Malaysia.
+**Official inflation is one national number. Your cost of living depends on what you buy and where you live.** This system forecasts Malaysian CPI by state and category from official DOSM and BNM data, refreshes itself every month, and turns it into a forecast of your own spending in ringgit, in English and Bahasa Malaysia.
 
 [**Live app**](https://inflation-app-lxxpkjdxja-as.a.run.app) · [API docs](https://inflation-api-lxxpkjdxja-as.a.run.app/docs) · [Case study: my model was 97% accurate, until I tested it properly](docs/case-study.md)
 
@@ -33,7 +33,7 @@ Malaysia's official CPI is a single national average. A person in Kelantan spend
 
 ## What It Does
 
-**Personal budget forecast.** Enter your salary and what you really spend per category, in ringgit. You get your **personal inflation over the past 12 months** next to the official rate over the same period (like-for-like), then a 3, 6 or 12-month forecast per category with backtest-calibrated 80% ranges. A "Quick estimate" button starts from your state's average household, so a first result takes two clicks. An AI-written budgeting suggestion is available on request, grounded in your own numbers.
+**Personal budget forecast.** Enter your salary and what you really spend per category, in ringgit. You get **how fast your own costs rose over the past 12 months** next to the official rate over the same period (like-for-like), then a 3, 6 or 12-month forecast per category with backtest-calibrated 80% ranges. A "Quick estimate" button starts from your state's average household, so a first result takes two clicks. An AI-written budgeting suggestion is available on request, grounded in your own numbers.
 
 **Relocation planner.** Compare the cost of living between any two Malaysian states. Destination spending starts from the difference in average household spending (DOSM HIES 2022) and is fully editable. Each state's prices are then forecast forward, with a salary-needed estimate. (It deliberately doesn't divide one state's CPI index by another's: index levels measure change since a base period, not how expensive a state is.)
 
