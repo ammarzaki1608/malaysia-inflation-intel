@@ -265,6 +265,7 @@ st.markdown("""
     [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: #5F5E5A; font-size: 0.9rem; }
 
     /* Home */
+    .mi-hero [data-testid="stHeaderActionElements"], .mi-hero h1 a { display: none !important; }
     .mi-eyebrow { display: inline-block; font-size: 0.82rem; color: #185FA5; background: #E6F1FB;
                   border-radius: 999px; padding: 3px 12px; margin-bottom: 14px; }
     .mi-hero h1 { font-size: 2.3rem; line-height: 1.2; margin: 0 0 12px; color: #2C2C2A; }
@@ -885,18 +886,18 @@ def render_home(t, lang):
     # ── hero ─────────────────────────────────────────────────────────────────
     H = {
         "en": dict(
-            headline="Your inflation isn't the national average",
-            sub="Enter what you spend each month. See what it will cost in 3, 6 or 12 months, in ringgit, "
-                "and which category is rising fastest for you.",
+            headline="How much more will your spending cost?",
+            sub="The official figure is one average for everyone. Enter what you spend each month to see what it "
+                "will cost you in 3, 6 or 12 months, in ringgit, and which category is rising fastest for you.",
             cta="Calculate my forecast", official="Official inflation, year to {month}: {pct}%",
             example="Example: same month, different reality", official_row="Official headline",
             food_row="Heavy food spender", housing_row="Heavy housing spender",
             illustrative="Illustrative figures.", open_calc="Open the calculator", open_reloc="Open the planner",
             model_title="Forecast model"),
         "ms": dict(
-            headline="Inflasi anda bukan purata kebangsaan",
-            sub="Masukkan perbelanjaan bulanan anda. Lihat kosnya dalam 3, 6 atau 12 bulan, dalam ringgit, "
-                "dan kategori yang paling pantas naik untuk anda.",
+            headline="Berapa banyak lagi perbelanjaan anda akan meningkat?",
+            sub="Angka rasmi ialah satu purata untuk semua orang. Masukkan perbelanjaan bulanan anda untuk melihat "
+                "kosnya dalam 3, 6 atau 12 bulan, dalam ringgit, dan kategori yang paling pantas naik untuk anda.",
             cta="Kira unjuran saya", official="Inflasi rasmi, setahun hingga {month}: {pct}%",
             example="Contoh: bulan sama, realiti berbeza", official_row="Angka rasmi",
             food_row="Perbelanjaan makanan tinggi", housing_row="Perbelanjaan perumahan tinggi",
