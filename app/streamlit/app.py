@@ -1,7 +1,7 @@
 """
-Real Ringgit: personal inflation forecasts for Malaysia (Streamlit app)
+Real Ringgit: a cost-of-living forecast for Malaysia (Streamlit app)
 
-A citizen-facing tool that calculates personal inflation rates
+A citizen-facing tool that forecasts how much more your own spending will cost
 and helps Malaysians plan relocation decisions using official
 DOSM and BNM data.
 """
@@ -27,7 +27,7 @@ from user_profile import (HORIZONS, MAX_CATEGORY, MAX_INCOME, decode_profile,
 
 # ── page config — must be first Streamlit call ───────────────────────────────
 st.set_page_config(
-    page_title="Real Ringgit: personal inflation for Malaysia",
+    page_title="Real Ringgit: a cost-of-living forecast for Malaysia",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -806,13 +806,13 @@ def render_home(t, lang):
     """Landing page — explains what the app does and how to use it."""
 
     if lang == "en":
-        section1_title = "What is personal inflation?"
+        section1_title = "Why your cost of living is not the national average"
         section1_body = (
             "Malaysia's official CPI is calculated using a fixed national basket — "
             "an assumed average of how Malaysians spend money across 13 categories.\n\n"
             "But if you spend 40% of your income on food and food prices rise 5%, "
             "you feel that much more than someone who spends only 20% on food.\n\n"
-            "Your inflation = your spending pattern × actual price changes per category."
+            "Your own inflation rate = your spending pattern × actual price changes per category."
         )
         section2_title = "What you can do with this app"
         card1_title = "Budget Forecast"
@@ -821,7 +821,7 @@ def render_home(t, lang):
         card2_title = "Relocation Planner"
         card2_body = "Thinking of moving to KL, Johor, or another state? We start from how much the average household spends in each state (DOSM HIES 2022), let you adjust every amount, forecast both side by side in ringgit, and estimate the salary you'd need to keep your standard of living."
         card2_best = "Best for: evaluating a job offer in another state."
-        ready_text = "Ready to find out your personal inflation rate?"
+        ready_text = "Ready to see how much more your spending will cost?"
         step1_title = "Pick your mode"
         step1_body = "Choose Calculator or Relocation from the menu at the top."
         step2_title = "Enter your real numbers"
@@ -844,13 +844,13 @@ def render_home(t, lang):
         - This is an **independent research project** — not affiliated with DOSM, BNM, or any government agency.
         """
     else:
-        section1_title = "Apakah itu inflasi peribadi?"
+        section1_title = "Mengapa kos sara hidup anda tidak sama dengan purata kebangsaan"
         section1_body = (
             "CPI rasmi Malaysia dikira menggunakan 'bakul' tetap kebangsaan — "
             "anggaran purata bagaimana rakyat Malaysia berbelanja merentasi 13 kategori utama.\n\n"
             "Namun, jika anda membelanjakan 40% daripada pendapatan untuk makanan dan harga makanan meningkat sebanyak 5%, "
             "anda akan merasai kesan tersebut dengan lebih ketara berbanding individu yang hanya membelanjakan 20% untuk makanan.\n\n"
-            "Inflasi peribadi anda = corak perbelanjaan anda × perubahan harga sebenar setiap kategori."
+            "Kadar inflasi anda sendiri = corak perbelanjaan anda × perubahan harga sebenar setiap kategori."
         )
         section2_title = "Fungsi yang ditawarkan oleh aplikasi ini"
         card1_title = "Unjuran Belanjawan"
@@ -859,7 +859,7 @@ def render_home(t, lang):
         card2_title = "Perancang Perpindahan"
         card2_body = "Sedang mempertimbangkan untuk berpindah ke Kuala Lumpur, Johor, atau negeri lain? Kami bermula dengan purata perbelanjaan isi rumah di setiap negeri (HIES DOSM 2022), membenarkan anda melaraskan setiap jumlah, memaparkan unjuran perbandingan dalam unit Ringgit, dan menganggarkan gaji yang diperlukan untuk mengekalkan taraf hidup anda."
         card2_best = "Sesuai untuk: Menilai tawaran pekerjaan di negeri lain."
-        ready_text = "Sedia untuk mengetahui kadar inflasi peribadi anda?"
+        ready_text = "Sedia untuk melihat berapa banyak lagi perbelanjaan anda akan meningkat?"
         step1_title = "Pilih mod anda"
         step1_body = "Pilih Kalkulator atau Perpindahan daripada menu di bahagian atas."
         step2_title = "Masukkan angka sebenar anda"
@@ -1348,7 +1348,7 @@ def render_personal_calculator(t: dict, lang: str):
     st.caption(caption_text)
 
     # ── Report header — gives the output a clear name and identity ─────────
-    report_title = "Your Personal Inflation Report" if lang == "en" else "Laporan Inflasi Peribadi Anda"
+    report_title = "Your Cost-of-Living Report" if lang == "en" else "Laporan Kos Sara Hidup Anda"
     st.subheader(report_title)
 
     # ── Plain-language interpretation — tells the user what the number means ─
@@ -1371,23 +1371,23 @@ def render_personal_calculator(t: dict, lang: str):
         interp_color = "#444441"
     elif gap < 0.5:
         interpretation = (
-            "Your personal inflation is close to the national average — no urgent action needed, but it's worth keeping an eye on the category flagged below."
+            "Your costs are rising at about the same pace as the national average — no urgent action needed, but it's worth keeping an eye on the category flagged below."
             if lang == "en" else
-            "Inflasi peribadi anda hampir sama dengan purata kebangsaan — tiada tindakan segera diperlukan, tetapi elok pantau kategori yang dikenal pasti di bawah."
+            "Kos anda meningkat pada kadar yang hampir sama dengan purata kebangsaan — tiada tindakan segera diperlukan, tetapi elok pantau kategori yang dikenal pasti di bawah."
         )
         interp_color = "#0F6E5C"
     elif personal > headline_pct:
         interpretation = (
-            "Your personal inflation is running noticeably higher than the national average — the category flagged as your biggest leak below is worth addressing first."
+            "Your costs are rising noticeably faster than the national average — the category flagged as your biggest leak below is worth addressing first."
             if lang == "en" else
-            "Inflasi peribadi anda jauh lebih tinggi berbanding purata kebangsaan — kategori yang dikenal pasti sebagai paling banyak makan bajet di bawah wajar ditangani dahulu."
+            "Kos anda meningkat jauh lebih pantas berbanding purata kebangsaan — kategori yang dikenal pasti sebagai paling banyak makan bajet di bawah wajar ditangani dahulu."
         )
         interp_color = "#dc2626"
     else:
         interpretation = (
-            "Your personal inflation is running lower than the national average — your spending pattern is currently working in your favour."
+            "Your costs are rising more slowly than the national average — your spending pattern is currently working in your favour."
             if lang == "en" else
-            "Inflasi peribadi anda lebih rendah berbanding purata kebangsaan — corak perbelanjaan anda pada masa ini memberi manfaat kepada anda."
+            "Kos anda meningkat lebih perlahan berbanding purata kebangsaan — corak perbelanjaan anda pada masa ini memberi manfaat kepada anda."
         )
         interp_color = "#16a34a"
 
@@ -1456,7 +1456,7 @@ def render_personal_calculator(t: dict, lang: str):
     if lang == "en":
         past_text = (
             f"Over the <b>past 12 months</b>, official inflation was <b>{headline_pct:.1f}%</b>. "
-            f"With <b>your spending mix</b>, your personal inflation over the same 12 months was "
+            f"With <b>your spending mix</b>, your own inflation rate over the same 12 months was "
             f"<b style='color:{validation_color}'>{personal:+.1f}%</b> — "
             f"{abs(personal - headline_pct):.1f} points {direction_word} than the official rate."
             if can_compare else
@@ -1469,7 +1469,7 @@ def render_personal_calculator(t: dict, lang: str):
     else:
         past_text = (
             f"Dalam <b>12 bulan lalu</b>, inflasi rasmi ialah <b>{headline_pct:.1f}%</b>. "
-            f"Berdasarkan <b>corak perbelanjaan anda</b>, inflasi peribadi anda bagi tempoh 12 bulan yang sama ialah "
+            f"Berdasarkan <b>corak perbelanjaan anda</b>, kadar inflasi anda sendiri bagi tempoh 12 bulan yang sama ialah "
             f"<b style='color:{validation_color}'>{personal:+.1f}%</b> — "
             f"iaitu {abs(personal - headline_pct):.1f} mata {direction_word} berbanding kadar rasmi."
             if can_compare else
