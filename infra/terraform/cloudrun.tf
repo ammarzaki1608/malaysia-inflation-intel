@@ -4,6 +4,26 @@ resource "google_artifact_registry_repository" "main" {
   repository_id = "malaysia-inflation-intel"
   format        = "DOCKER"
   description   = "Docker images for Malaysia Inflation Intelligence"
+
+  # Every deploy pushes new images, and old ones were piling up (36 GB, billed
+  # monthly). Delete versions older than 7 days, but always keep the 5 newest
+  # of each image so a rollback is still possible. Keep rules win over delete.
+  cleanup_policy_dry_run = false
+  cleanup_policies {
+    id     = "delete-older-than-7-days"
+    action = "DELETE"
+    condition {
+      tag_state  = "ANY"
+      older_than = "604800s"
+    }
+  }
+  cleanup_policies {
+    id     = "keep-5-newest"
+    action = "KEEP"
+    most_recent_versions {
+      keep_count = 5
+    }
+  }
 }
 
 # ── Evaluation log token ──────────────────────────────────────────────────────
@@ -86,6 +106,10 @@ resource "google_cloud_run_v2_service" "api" {
           cpu    = "2"
           memory = "2Gi"
         }
+        # Bill CPU only while a request is being handled. The forecast table is
+        # re-checked lazily on requests, so nothing needs CPU between them.
+        cpu_idle          = true
+        startup_cpu_boost = true
       }
 
       startup_probe {
@@ -136,11 +160,15 @@ resource "google_cloud_run_v2_service" "streamlit" {
           cpu    = "1"
           memory = "512Mi"
         }
+        cpu_idle          = true
+        startup_cpu_boost = true
       }
     }
 
     scaling {
-      min_instance_count = 1 # keep one warm so the public link loads without a cold start
+      # Scale to zero. A warm instance (min 1, CPU always on) cost about RM10 a day,
+      # most of the bill; the price is a cold start of a few seconds after idle.
+      min_instance_count = 0
       max_instance_count = 2
     }
   }
